@@ -55,6 +55,127 @@ possible, and follows whatever player is running instead of living inside one.
 | Code signing | SignPath Foundation | Decided |
 | Store title | "Sonorant – Music Visualizer" | Decided |
 
+## Progress
+
+*As of 2026-09-19, the end of the first working session.* Phases 0 to 2 are done apart
+from the checks that need other machines or CI. Phase 3 has started, and the next session
+picks it up at [Next](#next).
+
+**Phase 0 (repository, CI, skeleton): done, except clean frame pacing and CI**
+
+- [x] The `sonorant` repo, with the plan as its first commit. Five crates plus
+  `sonorant-testdata`, Rust 1.98.1 pinned, edition 2024, GPL-3.0-or-later.
+- [x] The CI workflow: fmt, clippy with warnings as errors, tests on `ubuntu-24.04`,
+  `ubuntu-24.04-arm` and `windows-latest`, and cargo-deny. Written and clean locally, but
+  it hasn't run yet: the GitHub repo doesn't exist yet.
+- [x] The skeleton (winit, wgpu and egui, a test menu, frame-pacing measurement with
+  `--pacing-seconds` and `--pacing-log`). It has since grown into the live app below.
+- [x] Reference vectors: `build\export.cmd` in Nostalgia+ (branch
+  `sonorant-reference-export`, not yet merged) wrote `tests/reference/`, and the
+  screenshots are copied beside them.
+- [ ] Frame pacing locked to vsync with no dropped frames. On the Windows 10 reference PC
+  it isn't yet; see [Measurements](#measurements). Ubuntu (GNOME Wayland at 125% and
+  150%), Windows 11 and a 144 Hz monitor aren't measured yet.
+- [ ] CI green on all three runners.
+
+**Phase 1 (DSP, verified): done, except the hop-time target**
+
+- [x] `sonorant-dsp`: the FFT bank in all four profiles, paired stereo transforms, six
+  windows, tilt, auto-range, BS.1770 loudness with true peak, crest and overs, tempo,
+  brightness, curve shaping and ballistics, the frequency map and notes. Nine reference
+  suites pass within the plan's tolerances, at 48 and 44.1 kHz, with filters checked at
+  16, 32, 88.2 and 96 kHz as well.
+- [x] The analysis engine: a fixed hop in audio time, so output doesn't depend on
+  chunking. At 60 hops per second it reproduces Nostalgia+'s whole per-frame pipeline
+  (curves, extremes, range, features). The analysis thread publishes through rtrb and a
+  triple buffer.
+- [x] Settings persistence, user presets, themes and the image timeline, ported as tests.
+  The TOML store and the Nostalgia+ importer have been checked against the exported files
+  and against a real Nostalgia+ install.
+- [x] Benchmarks with criterion. The Balanced hop takes 1.18 ms against a 0.5 ms target;
+  see [Measurements](#measurements).
+- Moved: the "menu actions" tests go with the menu model in Phase 5, and the centre deck
+  and quick bar "layout budgets" go with that layout in Phase 3. The pane layout is
+  already checked against the reference, rectangle for rectangle.
+
+**Phase 2 (capture): done on Windows; Linux and live checks pending**
+
+- [x] The `AudioSource` trait with its status states, and a WAV file source.
+- [x] Windows: event-driven WASAPI loopback on an MMCSS thread, process loopback, default
+  device changes (polled once a second), the exclusive-mode state, silence fed while
+  nothing plays, and a list of apps with audio sessions. Whole-system capture runs on the
+  reference PC at 48 kHz with nothing dropped.
+- [x] Linux: a PipeWire stream on the default sink's monitor or on one app's node, asking
+  for a 256-frame quantum, plus an app list from the registry. It's written against
+  pipewire-rs 0.10 but has never been compiled; the first Linux CI run will be its first
+  build. Its process callback runs on the source's own loop thread rather than PipeWire's
+  real-time one, so the silence timer and capture share the ring's single producer.
+- [ ] Process loopback and device switching, exercised with sound playing.
+- [ ] Capture-to-analysis latency measured (target under 15 ms).
+- [ ] Ubuntu 24.04 and 26.04, and Windows 11.
+
+**Phase 3 (renderer, parity): started**
+
+- [x] The pane layout, the history store (Float16 level pairs in a texture array, each
+  row's range in a side texture, row timestamps on the CPU), and the spectrogram pass. It
+  maps any axis, range and palette per pixel, scrolls by the audio clock, and freezes.
+- [x] The app draws live analysis: capture or a WAV file, then the analysis thread, the
+  history store and the spectrogram, with a status line showing capture, loudness, tempo
+  and pacing.
+
+### Next
+
+First, the three misses in [Measurements](#measurements):
+
+- **Hop time.** Build a projection plan per map (band, bin range, blend weights and
+  tilt for each column) when the axis or size changes, instead of recomputing edges and
+  logarithms every hop, for both the display columns and the history grid. The reference
+  suites must still pass.
+- **Frame pacing.** Measure at presentation rather than acquisition (DXGI frame
+  statistics, or wgpu's present timing), compare windowed and fullscreen, and find the
+  half-second stalls: shader compilation on first use, the WAV loop restarting, or
+  something in the Optimus copy path.
+- **Start-up.** Stop enumerating every backend: open Direct3D 12 (or Vulkan on Linux)
+  first and fall back only when needed, and start capture while the GPU opens.
+
+Then Phase 3 continues, in this order:
+
+1. Curves: line, bars and LED; flat, smooth and spline; the peak, average and minimum
+   traces; solid fill; the amber reference curve.
+2. Text with cosmic-text and glyphon, bundling IBM Plex Sans and Plex Mono. Axis labels,
+   the grid and graph backgrounds, the scale lane, time marks, semitones and harmonics.
+3. The goniometer, correlation and balance bars, waveform lanes, colour bar, and the
+   status line drawn in the renderer.
+4. The floating-point target and bloom (today's glow), the backdrop, hue drift and beat
+   flare.
+5. The centre deck, bottom band and quick bar, with Nostalgia+'s layout-budget tests
+   (`tests/reference/layout.json` has its rectangles).
+6. Golden renders on lavapipe and WARP, and GPU timestamp queries for the 3 ms budget.
+
+Also open from earlier phases: push to GitHub and get CI green, which includes the first
+PipeWire build, and the checks on other machines listed above.
+
+### Measurements
+
+| What | Result | Target |
+|---|---|---|
+| Stereo spectrum, 1,080 columns (Fast / Balanced / High / Low latency) | 0.27 / 0.65 / 1.22 / 0.33 ms | |
+| Whole hop at 120 hops per second, Balanced | **1.18 ms: not met** | Under 0.5 ms |
+| Frame pacing, Windows 10 reference PC, 59 Hz panel, GeForce 840M on Direct3D 12, release build, windowed, 30 s | **Not met:** 57.3 fps, median 15.6 ms, p99 31.6 ms, 8% of intervals over 1.5 periods, two stalls of about 0.5 s | No dropped frames in steady state |
+| First frame, release build | **Not met:** 4.3 s | Under 300 ms |
+| Release binary (Windows, GNU toolchain) | 14.2 MB | Under 15 MB download |
+
+The CPU numbers are from the i7-4510U, a 2014 laptop part. All three misses are the
+first jobs of the next session.
+
+### Building on the Windows reference PC
+
+The PC has no Visual Studio, so it builds with Rust's GNU toolchain. That needs three
+adjustments, all described in the README: an assembler-free `dlltool`, a `libshlwapi.a`,
+and linking with LLD, because the bundled GNU `ld` mis-merges import libraries and the
+program crashes before `main`. `criterion` stays at 0.5 because later versions compile C.
+CI builds with MSVC and isn't affected.
+
 ## Targets
 
 These are the numbers that "smooth, fast and real time" mean. Each phase gates on the ones

@@ -9,15 +9,16 @@ plan, with every decision and phase, is in [docs/plan.md](docs/plan.md).
 
 ## Status
 
-Early work. What exists today:
+Early work: Phases 0 to 2 are done and Phase 3, the renderer, has started. See
+[Progress](docs/plan.md#progress) in the plan.
 
 | Part | State |
 |---|---|
-| `sonorant-dsp` | Ported and verified against Nostalgia+'s reference vectors: the multi-resolution FFT bank, all six windows, mid/side and single-channel modes, BS.1770 loudness and true peak, overs, dynamic range, curve shaping and ballistics, notes, tempo and brightness |
-| `sonorant-core` | Palettes, verified against the reference |
-| `sonorant-render` | The scrolling spectrogram pass: a GPU ring of level rows, coloured through a palette and scrolled by audio time |
-| `sonorant` | The Phase 0 skeleton: a window with wgpu and egui, a synthetic spectrogram, a test menu and frame-pacing measurement |
-| `sonorant-platform` | Empty until Phase 2 (capture) |
+| `sonorant-dsp` | Verified against Nostalgia+'s reference vectors: the multi-resolution FFT bank, all six windows, mid/side and single-channel modes, BS.1770 loudness and true peak, overs, dynamic range, curve shaping and ballistics, notes, tempo and brightness |
+| `sonorant-core` | Every setting and preset, TOML settings, presets and themes, the Nostalgia+ importer, palettes, the analysis engine and thread, and a WAV source |
+| `sonorant-platform` | WASAPI loopback of the whole system or one app on Windows; PipeWire on Linux (not yet compiled) |
+| `sonorant-render` | The pane layout, the GPU history store and the spectrogram pass |
+| `sonorant` | Captures, analyses and draws the live spectrogram with a status line and a provisional menu; `sonorant capture` runs the pipeline without a window |
 
 ## Building
 
@@ -51,17 +52,24 @@ adjustments to what rustup bundles:
   `rust-lld.exe` named `ld.exe` and empty `crtbegin.o` and `crtend.o` objects, and
   with `-B` and `-L` pointing at the toolchain's `lib/self-contained`.
 
-## Running the skeleton
+## Running
 
 ```sh
-cargo run --release -- --help
-cargo run --release -- --pacing-seconds 30 --pacing-log pacing-60hz.csv
+cargo run --release                        # capture everything the system plays
+cargo run --release -- --app Spotify       # one app (a name or process id)
+cargo run --release -- --wav song.wav      # a WAV file, looped, instead of capture
+cargo run --release -- --pacing-seconds 30 --pacing-log pacing.csv
+cargo run --release -- capture --seconds 10   # no window: print loudness once a second
+cargo run --release -- apps                   # the apps that can be captured alone
 ```
 
-Right-click for the test menu. **Space** pauses the scroll, **F11** toggles fullscreen.
-The status line shows frame rate, the 50th and 99th percentile frame interval and the
-refreshes missed, measured from the moments frames get their swapchain image. On exit
-the same figures are logged for the whole run.
+Right-click for the provisional menu. **Space** or a click freezes the picture while
+analysis carries on, and **F11** toggles fullscreen. The status line shows what is being
+captured, loudness and tempo, the frame rate, the 99th percentile frame interval and the
+refreshes missed. On exit the pacing figures for the whole run are logged.
+
+Settings live in `%APPDATA%\Sonorant` or `~/.config/sonorant`. On the first run on
+Windows, Nostalgia+'s settings, presets and themes are brought over from MusicBee.
 
 ## Tests
 
