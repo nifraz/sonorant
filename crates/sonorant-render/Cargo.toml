@@ -11,8 +11,10 @@ publish.workspace = true
 [dependencies]
 sonorant-core = { workspace = true }
 wgpu = { workspace = true }
+glyphon = { workspace = true }
 bytemuck = { workspace = true }
 half = { workspace = true }
+png = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]

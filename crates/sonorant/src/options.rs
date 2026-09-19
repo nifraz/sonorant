@@ -14,8 +14,11 @@ Options:
   --frame-latency <n>     frames the GPU may queue ahead, 1 to 3 (default 2)
   --backend <name>        vulkan, dx12, gl or metal (default: the platform's best)
   --fullscreen            start fullscreen
+  --settings <dir>        keep settings in this folder instead of the usual one
   --pacing-seconds <s>    measure frame pacing for s seconds, print a summary, exit
   --pacing-log <file>     write every frame interval to a CSV file on exit
+  --screenshot <file>     save the window's picture as a PNG after a few seconds, exit
+  --screenshot-seconds <s>  how long to wait before the screenshot (default 5)
   -h, --help              show this help
   -V, --version           show the version";
 
@@ -27,8 +30,11 @@ pub struct Options {
     pub frame_latency: u32,
     pub backends: Option<wgpu::Backends>,
     pub fullscreen: bool,
+    pub settings_dir: Option<PathBuf>,
     pub pacing_seconds: Option<f64>,
     pub pacing_log: Option<PathBuf>,
+    pub screenshot: Option<PathBuf>,
+    pub screenshot_seconds: f64,
     pub help: bool,
     pub version: bool,
 }
@@ -37,6 +43,7 @@ impl Options {
     pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
         let mut o = Options {
             frame_latency: 2,
+            screenshot_seconds: 5.0,
             ..Options::default()
         };
         let mut args = args.into_iter();
@@ -70,6 +77,7 @@ impl Options {
                     })
                 }
                 "--fullscreen" => o.fullscreen = true,
+                "--settings" => o.settings_dir = Some(PathBuf::from(value("--settings")?)),
                 "--pacing-seconds" => {
                     let v = value("--pacing-seconds")?;
                     o.pacing_seconds = match v.parse::<f64>() {
@@ -82,6 +90,18 @@ impl Options {
                     };
                 }
                 "--pacing-log" => o.pacing_log = Some(PathBuf::from(value("--pacing-log")?)),
+                "--screenshot" => o.screenshot = Some(PathBuf::from(value("--screenshot")?)),
+                "--screenshot-seconds" => {
+                    let v = value("--screenshot-seconds")?;
+                    o.screenshot_seconds = match v.parse::<f64>() {
+                        Ok(s) if s >= 0.0 => s,
+                        _ => {
+                            return Err(format!(
+                                "--screenshot-seconds takes a number of seconds, not {v}"
+                            ));
+                        }
+                    };
+                }
                 "-h" | "--help" => o.help = true,
                 "-V" | "--version" => o.version = true,
                 other => return Err(format!("unknown option {other}")),

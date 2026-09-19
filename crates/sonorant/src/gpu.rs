@@ -145,8 +145,16 @@ impl Gpu {
             }
             None => wgpu::PresentMode::Fifo,
         };
+        // Copying frames out costs nothing unless it's asked for.
+        let copy = if options.screenshot.is_some()
+            && caps.usages.contains(wgpu::TextureUsages::COPY_SRC)
+        {
+            wgpu::TextureUsages::COPY_SRC
+        } else {
+            wgpu::TextureUsages::empty()
+        };
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | copy,
             format,
             width: size.width.max(1),
             height: size.height.max(1),

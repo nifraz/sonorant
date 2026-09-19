@@ -113,13 +113,7 @@ mod tests {
         let mut worst = 0.0f64;
         let mut x: f64 = 1e-300;
         while x < 1e300 {
-            for &v in &[
-                x,
-                x * 1.000_001,
-                x * 1.25,
-                x * 1.998_047,
-                x * 1.999_999,
-            ] {
+            for &v in &[x, x * 1.000_001, x * 1.25, x * 1.998_047, x * 1.999_999] {
                 let std = v.log10();
                 worst = worst.max((log10(v) - std).abs() / std.abs().max(1.0));
             }

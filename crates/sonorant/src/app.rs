@@ -4,10 +4,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use sonorant_core::engine::{AnalysisConfig, GRID_BINS};
-use sonorant_core::palette;
-use sonorant_core::settings::Settings;
+use sonorant_core::palette::{self, Lut};
+use sonorant_core::runtime::PaneCurves;
+use sonorant_core::settings::{CurveStyle, Settings};
 use sonorant_core::store::{self, Store};
-use sonorant_render::{HistoryStore, PaneView, Rect, RowIn, ScopeLayout, SpectrogramPass};
+use sonorant_render::{
+    CurveData, CurveLook, CurvePass, CurveView, HistoryStore, Layer, Overlay, PaneView, Readback,
+    Rect, RowIn, ScopeLayout, SpectrogramPass, axes,
+};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
@@ -50,6 +54,8 @@ struct Running {
     /// Start-up's timings, until the first frame is on its way to the screen.
     steps: Option<Steps>,
     started: Instant,
+    /// Where to save a screenshot, and when.
+    screenshot: Option<(std::path::PathBuf, Duration)>,
     window: Arc<Window>,
     gpu: Gpu,
     egui_ctx: egui::Context,
@@ -57,6 +63,15 @@ struct Running {
     egui_renderer: egui_wgpu::Renderer,
     history: HistoryStore,
     spectrogram: SpectrogramPass,
+    curves: CurvePass,
+    overlay: Overlay,
+    lut: Lut,
+    /// The newest curves and the range they were measured against.
+    latest: Vec<PaneCurves>,
+    range: (f64, f64),
+    /// The average spectrum of each pane when the reference was taken, drawn in amber
+    /// until it's dropped.
+    reference: Option<Vec<Vec<f32>>>,
     audio: Option<Audio>,
     settings: Settings,
     store: Option<Store>,
@@ -92,7 +107,7 @@ impl App {
 
     fn start(&mut self, event_loop: &ActiveEventLoop) -> Result<Running, String> {
         let mut steps = Steps::new(self.started);
-        let (settings, store) = load_settings();
+        let (settings, store) = load_settings(self.options.settings_dir.as_deref());
         steps.mark("settings");
 
         // Capture opens on a thread of its own while the window and the GPU do.
@@ -149,7 +164,11 @@ impl App {
         let history = HistoryStore::new(&gpu.device, GRID_BINS as u32, rows);
         let mut spectrogram = SpectrogramPass::new(&gpu.device, gpu.view_format);
         spectrogram.bind(&gpu.device, &history);
-        spectrogram.set_palette(&gpu.queue, &palette::build_lut(settings.palette));
+        let lut = palette::build_lut(settings.palette);
+        spectrogram.set_palette(&gpu.queue, &lut);
+        let curves = CurvePass::new(&gpu.device, gpu.config.format);
+        curves.set_palette(&gpu.queue, &lut);
+        let overlay = Overlay::new(&gpu.device, &gpu.queue, gpu.config.format);
         steps.mark("renderer");
 
         let audio = match opening.join() {
@@ -180,6 +199,12 @@ impl App {
         Ok(Running {
             steps: Some(steps),
             started: self.started,
+            screenshot: self.options.screenshot.clone().map(|path| {
+                (
+                    path,
+                    Duration::from_secs_f64(self.options.screenshot_seconds),
+                )
+            }),
             status: Status {
                 adapter: gpu.adapter_info.name.clone(),
                 backend: format!("{:?}", gpu.adapter_info.backend),
@@ -193,6 +218,12 @@ impl App {
             egui_renderer,
             history,
             spectrogram,
+            curves,
+            overlay,
+            lut,
+            latest: Vec::new(),
+            range: (-95.0, -5.0),
+            reference: None,
             audio,
             settings,
             store,
@@ -230,8 +261,13 @@ impl App {
     }
 }
 
-/// The saved settings, bringing Nostalgia+'s over on the first run.
-fn load_settings() -> (Settings, Option<Store>) {
+/// The saved settings, bringing Nostalgia+'s over on the first run. A folder given on
+/// the command line is used as it is, without the import.
+fn load_settings(dir: Option<&std::path::Path>) -> (Settings, Option<Store>) {
+    if let Some(dir) = dir {
+        let store = Store::new(dir.to_path_buf());
+        return (store.load(), Some(store));
+    }
     let Some(dir) = store::default_dir() else {
         log::warn!("no settings folder; settings won't be kept");
         return (Settings::default(), None);
@@ -359,6 +395,14 @@ impl ApplicationHandler<UserEvent> for App {
                 ..
             } if !response.consumed => match logical_key {
                 Key::Named(NamedKey::Space) => r.ui.frozen = !r.ui.frozen,
+                Key::Character(c) if c.eq_ignore_ascii_case("a") => r.toggle_reference(),
+                Key::Character(c) if c.eq_ignore_ascii_case("b") => {
+                    r.settings.style = match r.settings.style {
+                        CurveStyle::Line => CurveStyle::Bars,
+                        CurveStyle::Bars => CurveStyle::Led,
+                        CurveStyle::Led => CurveStyle::Line,
+                    }
+                }
                 Key::Named(NamedKey::F11) => r.ui.fullscreen = !r.ui.fullscreen,
                 Key::Named(NamedKey::Escape) if r.ui.fullscreen => r.ui.fullscreen = false,
                 _ => {}
@@ -475,6 +519,8 @@ impl Running {
                 )
             });
             let s = audio.latest(now);
+            self.latest.clone_from(&s.panes);
+            self.range = (s.floor_db, s.ceiling_db);
             self.status.loudness = Some(s.loudness);
             self.status.bpm = s.bpm;
             self.status.dropped = (s.dropped_frames, s.dropped_rows);
@@ -565,6 +611,23 @@ impl Running {
             .collect();
         self.spectrogram
             .prepare(&self.gpu.queue, &self.history, &panes, self.held);
+        self.prepare_curves();
+        self.overlay
+            .begin(self.gpu.config.width, self.gpu.config.height);
+        let scales = axes::Scales {
+            layout: &self.layout,
+            settings: &self.settings,
+            map: &map,
+            floor_db: self.range.0,
+            ceiling_db: self.range.1,
+            px_per_second: rps * self.ui.px_per_row as f64,
+            scale: ppp,
+            alpha: 1.0,
+            top_inset: 0.0,
+            label_floor_y: 0.0,
+        };
+        axes::draw(&mut self.overlay, &scales);
+        self.overlay.prepare(&self.gpu.device, &self.gpu.queue);
 
         let mut encoder = self
             .gpu
@@ -588,7 +651,7 @@ impl Running {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         {
-            let bg = palette::background(&palette::build_lut(self.settings.palette));
+            let bg = palette::background(&self.lut);
             let mut pass = encoder
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("visuals"),
@@ -615,6 +678,31 @@ impl Running {
             self.spectrogram.draw(&mut pass, &panes);
         }
         {
+            // The furniture over the visuals, blended as GDI+ did (see colour.rs).
+            let mut pass = encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("furniture"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &plain,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                })
+                .forget_lifetime();
+            self.overlay.draw(Layer::Under, &mut pass);
+            self.curves.draw(&mut pass);
+            self.overlay.draw(Layer::Over, &mut pass);
+            self.overlay.draw(Layer::Top, &mut pass);
+        }
+        {
             let mut pass = encoder
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("ui"),
@@ -635,11 +723,29 @@ impl Running {
                 .forget_lifetime();
             self.egui_renderer.render(&mut pass, &paint_jobs, &screen);
         }
+        let shot = match &self.screenshot {
+            Some((_, after)) if self.started.elapsed() >= *after => Some(Readback::record(
+                &self.gpu.device,
+                &mut encoder,
+                &frame.texture,
+            )),
+            _ => None,
+        };
         self.gpu
             .queue
             .submit(extra.into_iter().chain(std::iter::once(encoder.finish())));
         self.window.pre_present_notify();
         self.gpu.queue.present(frame);
+        if let Some(shot) = shot
+            && let Some((path, _)) = self.screenshot.take()
+        {
+            match shot.save(&self.gpu.device, &path) {
+                Ok(()) => log::info!("saved the picture to {}", path.display()),
+                Err(e) => log::error!("cannot save a screenshot: {e}"),
+            }
+            self.ui.quit = true;
+        }
+        self.overlay.finish();
         self.last_work = now.elapsed();
         self.presented.sample(&self.gpu.surface);
         if let Some(mut steps) = self.steps.take() {
@@ -650,6 +756,61 @@ impl Running {
         for id in textures.free.drain() {
             self.egui_renderer.free_texture(&id);
         }
+    }
+
+    /// Uploads the curve strips for this frame's layout.
+    fn prepare_curves(&mut self) {
+        // A reference taken at another size no longer lines up with the rows.
+        if let Some(r) = &self.reference
+            && r.iter()
+                .zip(&self.latest)
+                .any(|(r, p)| r.len() != p.display.len())
+        {
+            self.reference = None;
+        }
+        let look = CurveLook::new(&self.settings, &self.lut, 1.0);
+        let (floor_db, ceiling_db) = self.range;
+        let strips: Vec<(CurveView, CurveData<'_>)> = self
+            .layout
+            .panes
+            .iter()
+            .zip(&self.latest)
+            .enumerate()
+            .filter(|(_, (p, c))| c.display.len() == p.curve.h as usize)
+            .map(|(i, (p, c))| {
+                let view = CurveView {
+                    rect: p.curve,
+                    curve_on_left: p.curve_on_left,
+                    floor_db,
+                    ceiling_db,
+                };
+                let data = CurveData {
+                    display: &c.display,
+                    peak: &c.max,
+                    average: &c.average,
+                    minimum: &c.min,
+                    reference: self
+                        .reference
+                        .as_ref()
+                        .and_then(|r| r.get(i))
+                        .map(Vec::as_slice),
+                };
+                (view, data)
+            })
+            .collect();
+        self.curves
+            .prepare(&self.gpu.device, &self.gpu.queue, &look, &strips);
+    }
+
+    /// Holds each pane's average spectrum as an amber reference, or drops the one held.
+    fn toggle_reference(&mut self) {
+        self.reference = match self.reference {
+            Some(_) => None,
+            None if !self.latest.is_empty() => {
+                Some(self.latest.iter().map(|p| p.average.clone()).collect())
+            }
+            None => None,
+        };
     }
 
     /// Applies whatever the menu or keys changed since the last frame.
@@ -663,8 +824,9 @@ impl Running {
         }
         if new.palette != old.palette {
             self.settings.palette = new.palette;
-            self.spectrogram
-                .set_palette(&self.gpu.queue, &palette::build_lut(new.palette));
+            self.lut = palette::build_lut(new.palette);
+            self.spectrogram.set_palette(&self.gpu.queue, &self.lut);
+            self.curves.set_palette(&self.gpu.queue, &self.lut);
         }
         let analysis_changed = new.rows_per_second != old.rows_per_second
             || new.pair_mode != old.pair_mode

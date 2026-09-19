@@ -57,9 +57,10 @@ possible, and follows whatever player is running instead of living inside one.
 
 ## Progress
 
-*As of 2026-09-19, the end of the first working session.* Phases 0 to 2 are done apart
-from the checks that need other machines or CI. Phase 3 has started, and the next session
-picks it up at [Next](#next).
+*As of 2026-09-20, the end of the second working session.* Phases 0 to 2 are done apart
+from the checks that need other machines or CI. The three targets missed in the first
+session are met or explained (see [Measurements](#measurements)). Phase 3 is two steps
+of six in, and the next session picks it up at [Next](#next).
 
 **Phase 0 (repository, CI, skeleton): done, except clean frame pacing and CI**
 
@@ -73,12 +74,19 @@ picks it up at [Next](#next).
 - [x] Reference vectors: `build\export.cmd` in Nostalgia+ (branch
   `sonorant-reference-export`, not yet merged) wrote `tests/reference/`, and the
   screenshots are copied beside them.
-- [ ] Frame pacing locked to vsync with no dropped frames. On the Windows 10 reference PC
-  it isn't yet; see [Measurements](#measurements). Ubuntu (GNOME Wayland at 125% and
-  150%), Windows 11 and a 144 Hz monitor aren't measured yet.
+- [x] Frame pacing measured as the viewer sees it: frames delivered against the
+  refreshes in the same time, at the compositor's exact rate (59.94 Hz here, which winit
+  rounds to 59). The old per-interval count read 8% missed where every refresh got a
+  frame; the swapchain just hands buffers back in bursts. On the Windows 10 reference PC
+  a 40 s windowed run misses 0.5% of refreshes with 40-50% background load. DXGI's own
+  present counters are read where they move (independent flip); under Optimus
+  composition they don't. Stalls over 100 ms are logged with where the time went.
+- [ ] No dropped frames in steady state: close (0.5%) but not zero on the reference PC.
+  Ubuntu (GNOME Wayland at 125% and 150%), Windows 11 and a 144 Hz monitor aren't
+  measured yet.
 - [ ] CI green on all three runners.
 
-**Phase 1 (DSP, verified): done, except the hop-time target**
+**Phase 1 (DSP, verified): done**
 
 - [x] `sonorant-dsp`: the FFT bank in all four profiles, paired stereo transforms, six
   windows, tilt, auto-range, BS.1770 loudness with true peak, crest and overs, tempo,
@@ -92,8 +100,13 @@ picks it up at [Next](#next).
 - [x] Settings persistence, user presets, themes and the image timeline, ported as tests.
   The TOML store and the Nostalgia+ importer have been checked against the exported files
   and against a real Nostalgia+ install.
-- [x] Benchmarks with criterion. The Balanced hop takes 1.18 ms against a 0.5 ms target;
-  see [Measurements](#measurements).
+- [x] Benchmarks with criterion, and the hop-time target: a Balanced hop now takes a
+  median 0.37 ms against 0.5 ms (from 1.18 ms). Projection plans per map, power spectra
+  with one root per column, a table-driven `log10` in `sonorant-dsp::math` in place of
+  the C runtime's (30 to 50 ns a call under MinGW), windowing straight from the capture
+  history, and the 8K-and-up transforms refreshing at most 60 times a second of audio.
+  Every reference suite still passes; at 60 hops a second every band still refreshes
+  every hop. `examples/hop_times.rs` in `sonorant-core` prints the per-hop distribution.
 - Moved: the "menu actions" tests go with the menu model in Phase 5, and the centre deck
   and quick bar "layout budgets" go with that layout in Phase 3. The pane layout is
   already checked against the reference, rectangle for rectangle.
@@ -114,7 +127,7 @@ picks it up at [Next](#next).
 - [ ] Capture-to-analysis latency measured (target under 15 ms).
 - [ ] Ubuntu 24.04 and 26.04, and Windows 11.
 
-**Phase 3 (renderer, parity): started**
+**Phase 3 (renderer, parity): steps 1 and 2 of 6 done**
 
 - [x] The pane layout, the history store (Float16 level pairs in a texture array, each
   row's range in a side texture, row timestamps on the CPU), and the spectrogram pass. It
@@ -122,30 +135,38 @@ picks it up at [Next](#next).
 - [x] The app draws live analysis: capture or a WAV file, then the analysis thread, the
   history store and the spectrogram, with a status line showing capture, loudness, tempo
   and pacing.
+- [x] Start-up: only the platform's backend opens (Direct3D 12, Vulkan on Linux), the
+  rest only as a fallback, and capture opens in parallel. 4.3 s became 1.1-2.7 s; what's
+  left is waking the GeForce behind Optimus (see [Measurements](#measurements)).
+- [x] Step 1, the curve strips (`curves.rs`, `curves.wgsl`): line with gradient fill,
+  bars and LED, the peak, average, minimum and amber reference traces (`A` holds and
+  drops it, `B` cycles the style), and the plain, lines, grid and chessboard backgrounds.
+  One fragment pass per strip measures each pixel's distance to the nearby segments, so
+  lines are anti-aliased and translucent traces don't bead at the joins.
+- [x] Step 2, text and scales: `overlay.rs` draws rectangles, gradients, anti-aliased
+  lines and text in three layers around the curves; glyphon 0.12 and cosmic-text 0.19
+  shape and draw IBM Plex Sans (Regular, Light, Medium) and Plex Mono, bundled with
+  their OFL licence and shaped once per label. `axes.rs` ports the frequency grid and
+  its labels (octaves down to semitones by the space available, note, Hz or both), the
+  gutter and outer label columns with their unit captions, semitone lines, time marks,
+  the level scale, the scale lane and the channel labels.
+- [x] The 2D layers blend sRGB-encoded colours, as GDI+ did, drawing on the swapchain's
+  plain view; blended in linear light, Nostalgia+'s faint lines would come out several
+  times brighter. The spectrogram stays on the sRGB view.
+- [x] `--screenshot <file.png>` saves the window's own frame after
+  `--screenshot-seconds` (for checking the renderer without capturing the screen), and
+  `--settings <dir>` runs with a settings folder of its own, for clean, repeatable runs.
+- Harmonics are drawn from the hover position, so they move to Phase 5 with the hover
+  readout. The status line is still egui's; it moves into the renderer in step 3.
 
 ### Next
 
-First, the three misses in [Measurements](#measurements):
+Phase 3 continues at step 3; steps 1 and 2 are done (see [Progress](#progress)).
 
-- **Hop time.** Build a projection plan per map (band, bin range, blend weights and
-  tilt for each column) when the axis or size changes, instead of recomputing edges and
-  logarithms every hop, for both the display columns and the history grid. The reference
-  suites must still pass.
-- **Frame pacing.** Measure at presentation rather than acquisition (DXGI frame
-  statistics, or wgpu's present timing), compare windowed and fullscreen, and find the
-  half-second stalls: shader compilation on first use, the WAV loop restarting, or
-  something in the Optimus copy path.
-- **Start-up.** Stop enumerating every backend: open Direct3D 12 (or Vulkan on Linux)
-  first and fall back only when needed, and start capture while the GPU opens.
-
-Then Phase 3 continues, in this order:
-
-1. Curves: line, bars and LED; flat, smooth and spline; the peak, average and minimum
-   traces; solid fill; the amber reference curve.
-2. Text with cosmic-text and glyphon, bundling IBM Plex Sans and Plex Mono. Axis labels,
-   the grid and graph backgrounds, the scale lane, time marks, semitones and harmonics.
 3. The goniometer, correlation and balance bars, waveform lanes, colour bar, and the
-   status line drawn in the renderer.
+   status line drawn in the renderer (Nostalgia+'s top-left line over the image, which
+   also sets the 14 px inset the overlaid labels already take). The overlay and
+   `Readback` are ready for all of it.
 4. The floating-point target and bloom (today's glow), the backdrop, hue drift and beat
    flare.
 5. The centre deck, bottom band and quick bar, with Nostalgia+'s layout-budget tests
@@ -153,20 +174,28 @@ Then Phase 3 continues, in this order:
 6. Golden renders on lavapipe and WARP, and GPU timestamp queries for the 3 ms budget.
 
 Also open from earlier phases: push to GitHub and get CI green, which includes the first
-PipeWire build, and the checks on other machines listed above.
+PipeWire build, and the checks on other machines listed above. A WSL Ubuntu on the
+reference PC would let the Linux code compile before CI exists. The first frame's
+100-odd ms of lazy initialisation (logged as a stall) could move into start-up.
 
 ### Measurements
 
-| What | Result | Target |
-|---|---|---|
-| Stereo spectrum, 1,080 columns (Fast / Balanced / High / Low latency) | 0.27 / 0.65 / 1.22 / 0.33 ms | |
-| Whole hop at 120 hops per second, Balanced | **1.18 ms: not met** | Under 0.5 ms |
-| Frame pacing, Windows 10 reference PC, 59 Hz panel, GeForce 840M on Direct3D 12, release build, windowed, 30 s | **Not met:** 57.3 fps, median 15.6 ms, p99 31.6 ms, 8% of intervals over 1.5 periods, two stalls of about 0.5 s | No dropped frames in steady state |
-| First frame, release build | **Not met:** 4.3 s | Under 300 ms |
-| Release binary (Windows, GNU toolchain) | 14.2 MB | Under 15 MB download |
+| What | Session 1 | Now | Target |
+|---|---|---|---|
+| Whole hop at 120 hops per second, Balanced (engine, per hop) | 1.18 ms | **Met:** median 0.37 ms, mean 0.48 ms, minimum 0.20 ms | Under 0.5 ms |
+| Display projection, 1,080 columns / history grid, 2,048 bins | 0.32 / 0.59 ms | 0.03-0.07 / 0.06-0.14 ms | |
+| Frame pacing, 59.94 Hz panel, GeForce 840M on Direct3D 12, windowed, 40 s | 8% "missed" (counted per interval), stalls of 0.5 s | 59.6 fps, 11 of 2,205 refreshes missed (0.5%); one 0.5 s stall in five runs, blocked in the swapchain | No dropped frames in steady state |
+| First frame, release build | 4.3 s | 1.1-2.7 s, of which opening the GPU is 0.8-1.9 s | Under 300 ms |
+| Release binary (Windows, GNU toolchain) | 14.2 MB | 16.9 MB; 7.1 MB zipped | Under 15 MB download |
 
-The CPU numbers are from the i7-4510U, a 2014 laptop part. All three misses are the
-first jobs of the next session.
+The CPU is the i7-4510U, a 2014 laptop part, and this session's figures were taken on
+battery with 40-50% of the CPU busy elsewhere, so the spread is wide. Start-up's floor
+here is Direct3D 12 device creation waking the GeForce 840M from Optimus power-off;
+everything else takes about 0.3 s. The Intel HD 4400 is always on but reachable only
+through OpenGL, where pipeline creation fails on a downlevel limit (a Phase 7 item), so
+300 ms on this machine would need the window up before the GPU is. The pacing figure
+is frames delivered against refreshes elapsed; with frames queued ahead, the
+swapchain's buffers come back at 15.5 and 31 ms intervals that average one refresh.
 
 ### Building on the Windows reference PC
 

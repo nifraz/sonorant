@@ -9,7 +9,7 @@ plan, with every decision and phase, is in [docs/plan.md](docs/plan.md).
 
 ## Status
 
-Early work: Phases 0 to 2 are done and Phase 3, the renderer, has started. See
+Early work: Phases 0 to 2 are done and Phase 3, the renderer, is two steps of six in. See
 [Progress](docs/plan.md#progress) in the plan.
 
 | Part | State |
@@ -17,7 +17,7 @@ Early work: Phases 0 to 2 are done and Phase 3, the renderer, has started. See
 | `sonorant-dsp` | Verified against Nostalgia+'s reference vectors: the multi-resolution FFT bank, all six windows, mid/side and single-channel modes, BS.1770 loudness and true peak, overs, dynamic range, curve shaping and ballistics, notes, tempo and brightness |
 | `sonorant-core` | Every setting and preset, TOML settings, presets and themes, the Nostalgia+ importer, palettes, the analysis engine and thread, and a WAV source |
 | `sonorant-platform` | WASAPI loopback of the whole system or one app on Windows; PipeWire on Linux (not yet compiled) |
-| `sonorant-render` | The pane layout, the GPU history store and the spectrogram pass |
+| `sonorant-render` | The pane layout, the GPU history store and the spectrogram, the curve strips, and a text and shape overlay (IBM Plex, bundled) carrying the frequency grid, time marks, level scale and scale lane |
 | `sonorant` | Captures, analyses and draws the live spectrogram with a status line and a provisional menu; `sonorant capture` runs the pipeline without a window |
 
 ## Building
@@ -59,12 +59,15 @@ cargo run --release                        # capture everything the system plays
 cargo run --release -- --app Spotify       # one app (a name or process id)
 cargo run --release -- --wav song.wav      # a WAV file, looped, instead of capture
 cargo run --release -- --pacing-seconds 30 --pacing-log pacing.csv
+cargo run --release -- --screenshot shot.png  # save the picture after 5 s, then exit
+cargo run --release -- --settings some/folder # settings of its own, for clean runs
 cargo run --release -- capture --seconds 10   # no window: print loudness once a second
 cargo run --release -- apps                   # the apps that can be captured alone
 ```
 
 Right-click for the provisional menu. **Space** or a click freezes the picture while
-analysis carries on, and **F11** toggles fullscreen. The status line shows what is being
+analysis carries on, **F11** toggles fullscreen, **A** holds the average spectrum as an
+amber reference (and drops it), and **B** cycles the curve between line, bars and LED. The status line shows what is being
 captured, loudness and tempo, the frame rate, the 99th percentile frame interval and the
 refreshes missed. On exit the pacing figures for the whole run are logged.
 
