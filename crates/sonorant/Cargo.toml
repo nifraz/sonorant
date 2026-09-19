@@ -1,0 +1,25 @@
+[package]
+name = "sonorant"
+description = "A real-time spectrogram, spectrum and loudness visualiser for whatever is playing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+sonorant-core = { workspace = true }
+sonorant-platform = { workspace = true }
+sonorant-render = { workspace = true }
+wgpu = { workspace = true }
+winit = { workspace = true }
+egui = { workspace = true }
+egui-wgpu = { workspace = true }
+egui-winit = { workspace = true }
+pollster = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+
+[lints]
+workspace = true

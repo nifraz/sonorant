@@ -4,6 +4,8 @@ members = [
     "crates/sonorant-dsp",
     "crates/sonorant-core",
     "crates/sonorant-platform",
+    "crates/sonorant-render",
+    "crates/sonorant",
     "crates/sonorant-testdata",
 ]
 

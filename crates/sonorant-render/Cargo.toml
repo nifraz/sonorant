@@ -1,0 +1,22 @@
+[package]
+name = "sonorant-render"
+description = "Sonorant's wgpu renderer: history store, spectrogram, curves, scope, bloom and layout"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+sonorant-core = { workspace = true }
+wgpu = { workspace = true }
+bytemuck = { workspace = true }
+half = { workspace = true }
+log = { workspace = true }
+
+[dev-dependencies]
+sonorant-testdata = { workspace = true }
+
+[lints]
+workspace = true

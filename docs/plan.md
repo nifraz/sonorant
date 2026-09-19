@@ -1,6 +1,7 @@
 # Sonorant: rewrite plan
 
-*Draft, 2026-09-19. Replaces the earlier .NET port plan (Avalonia + SkiaSharp).* Sonorant
+*2026-09-19. Replaces the earlier .NET port plan (Avalonia + SkiaSharp). Every decision
+is now made; the last twelve were settled the same day.* Sonorant
 is Nostalgia+ rewritten from scratch in Rust as a standalone app for Ubuntu and Windows. It
 keeps every feature of the MusicBee plugin, adds four visuals that only a GPU renderer makes
 possible, and follows whatever player is running instead of living inside one.
@@ -40,13 +41,35 @@ possible, and follows whatever player is running instead of living inside one.
 | Linux capture | Native PipeWire from day one | Decided |
 | Frame timing | Display refresh rate. Scrolling follows audio time | Decided |
 | v1 scope | Parity, plus phosphor scope and bloom, zoomable long history, 3D waterfall and beat-reactive backdrop | Decided |
-| Repository | New `sonorant` repo. This one stays as the plugin's home | Decided |
-| Text stack, font, targets, settings format, OS targets, packaging, signing, store title | See [Open questions](#open-questions) | **Open** |
+| Repository | New `sonorant` repo. The Nostalgia+ repo stays as the plugin's home | Decided |
+| Licence | GPL-3.0-or-later | Decided |
+| Text stack | cosmic-text and glyphon for the deck and axis labels; egui's own text for menus and help | Decided |
+| Font | IBM Plex Sans, with IBM Plex Mono for readouts (SIL Open Font License) | Decided |
+| Targets | The [targets](#targets) table as written, on two reference machines (below) | Decided |
+| Settings format | TOML, with a one-time importer for Nostalgia+'s `key=value` files | Decided |
+| History | 5 minutes at 60 rows per second, each row keeping its own range; a "global range" setting; length 1 to 15 minutes | Decided |
+| Visual delay | A manual offset, filled in automatically where PipeWire reports the sink's latency. Phase 7 | Decided |
+| Ubuntu | 24.04 LTS and 26.04 LTS, x64 and arm64 | Decided |
+| Windows | Windows 10 22H2 and Windows 11, x64. arm64 later | Decided |
+| Packaging | Flatpak and `.deb`; a zip and winget; the Microsoft Store later | Decided |
+| Code signing | SignPath Foundation | Decided |
+| Store title | "Sonorant – Music Visualizer" | Decided |
 
 ## Targets
 
-These are the numbers that "smooth, fast and real time" should mean. They are proposed
-(see open question 3), and each phase gates on the ones it affects.
+These are the numbers that "smooth, fast and real time" mean. Each phase gates on the ones
+it affects.
+
+**Reference machines:**
+
+- **Windows:** the development PC. Core i7-4510U, 8 GB, Intel HD 4400 plus a GeForce 840M
+  (2 GB), 1920×1080 at 60 Hz, Windows 10 22H2. It is the low-end floor and is measured on
+  the 840M: Intel no longer ships Direct3D 12 for Haswell graphics and never shipped Vulkan
+  for it on Windows, so wgpu can only reach the HD 4400 through OpenGL.
+- **Ubuntu:** a recent laptop with Intel Iris Xe graphics or newer, which the
+  "integrated GPU" figures below are written for.
+- The 2560×1440 figures are timed offscreen, and a 144 Hz monitor is borrowed for the
+  frame-pacing checks.
 
 | Measure | Nostalgia+ today | Sonorant target |
 |---|---|---|
@@ -143,7 +166,7 @@ sonorant/
 | Window, input, IME | winit |
 | GPU | wgpu, with shaders in WGSL |
 | Menus, help, dialogs | egui, egui-wgpu, egui-winit, AccessKit |
-| Deck and axis text | cosmic-text and glyphon (open question 1) |
+| Deck and axis text | cosmic-text and glyphon, with IBM Plex bundled |
 | FFT | rustfft (AVX, SSE, NEON) |
 | Lock-free queues | rtrb, triple_buffer |
 | Linux capture | pipewire (pipewire-rs) |
@@ -188,8 +211,8 @@ time per pass, where today it shows fps, DSP time and paint time.
   frequency axis (note, log or linear, FMin to FMax) and the zoom. Changing any of them
   redraws the whole history at once instead of only the new rows.
 - **Each row keeps its own range.** The floor and ceiling that auto-range had when a row was
-  made are kept in a small side texture, so history looks exactly as it does today (see
-  open question 5).
+  made are kept in a small side texture, so history looks exactly as it does today. A
+  "global range" setting re-maps the whole history as the range adapts instead.
 - **Capacity:** rows live in 4,096-row layers of a texture array. At the default 60 rows per
   second, 5 minutes is about 18,000 rows. That's about 74 MB per channel, or 150 MB for
   stereo. The length is a setting.
@@ -299,7 +322,8 @@ Phase 0 has no dependencies. Phases 1 and 2 can run in parallel after it.
 - **Layout:** the centre deck, bottom band and quick bar, rebuilt on Nostalgia+'s layout
   rules and their tests. For example, the artwork goes first when space runs out, and
   readouts fill columns before adding new ones.
-- **Text:** cosmic-text and glyphon, with a bundled font and system font fallback.
+- **Text:** cosmic-text and glyphon, with IBM Plex Sans and Plex Mono bundled and system
+  font fallback.
 - **Golden renders:** offscreen wgpu on software renderers in CI (lavapipe on Ubuntu, WARP
   on Windows), fed from the WAV source and compared with a tolerance.
 - **Done when:** the windowed, fullscreen and immersive views match the Nostalgia+
@@ -384,8 +408,8 @@ Phase 0 has no dependencies. Phases 1 and 2 can run in parallel after it.
 - **Latency:** measure end to end with timestamps through the pipeline.
 - **Power:** a low idle frame rate when paused, a full stop when the window is covered, and
   a check on battery.
-- **Visual delay:** an offset so the visuals line up with what you hear, if open question
-  6 says yes.
+- **Visual delay:** an offset so the visuals line up with what you hear: set by hand, and
+  filled in automatically on Ubuntu where PipeWire reports the sink's latency.
 - **Accessibility:** a pass with Orca and Narrator.
 - **Weak GPUs:** check the OpenGL backend and software rendering.
 - **Done when:** the [targets](#targets) are met on the two reference machines.
@@ -494,39 +518,33 @@ Phase 0 has no dependencies. Phases 1 and 2 can run in parallel after it.
 | Wayland won't let an app choose where its window goes or keep it on top | Fullscreen opens on the window's monitor. An always-on-top compact mode only where the platform allows it (Windows, X11) |
 | Track titles in scripts the bundled font doesn't cover | System font fallback through cosmic-text |
 | Flathub reviewers ask about `xdg-run/pipewire-0` | Other PipeWire audio tools on Flathub use the same permission. Explain it in the submission |
-| Unsigned Windows binaries trigger SmartScreen warnings | Code signing (open question 10) |
+| Unsigned Windows binaries trigger SmartScreen warnings | Code signing through SignPath Foundation |
 | Loudness about 0.2 dB off at 44.1 kHz | 44.1 kHz cases in Phase 1 |
 | MPRIS support varies by player (seek, artwork, composer) | Unwired controls stay hidden, as the deck already does |
 | "sonorant" is also an audiology product (an LED ear light), and Rogers Imaging filed an "Sonorant" trademark in 2020 for hearing and lighting devices | Software is a different trademark class. Use "Sonorant – Music Visualizer" as the store and search title. Not legal advice |
 
-## Open questions
+## How the open questions were settled
 
-Each one has a suggested answer.
+The plan left eleven questions open, and setting up Phase 0 added a twelfth, the licence.
+All twelve were answered on 2026-09-19. Each took the suggested answer except the font,
+and the answers are in the [decisions](#decisions) table. What's worth keeping from the
+reasoning:
 
-1. **Text stack:** cosmic-text and glyphon for the deck and axis labels, which gives proper
-   shaping and system font fallback for any script in a track title. egui's own text for
-   menus and help. Needed before Phase 3.
-2. **Font:** bundle Inter (SIL Open Font License). The layout is being rewritten anyway, so
-   matching Segoe UI's metrics (the earlier Selawik idea) no longer buys anything.
-3. **Targets:** confirm the [targets](#targets) table and choose two reference machines.
-   Suggested: an Ubuntu laptop with an Intel integrated GPU, and your Windows 10 PC.
-4. **Settings format:** TOML, with a one-time importer for the Nostalgia+ key=value file.
-5. **History defaults:** 5 minutes at 60 rows per second, with each row keeping its own
-   range so history looks as it does today. A "global range" option, where the whole
-   history re-maps as the range adapts, becomes a setting.
-6. **Visual delay:** add an offset so the visuals line up with Bluetooth headphones: set
-   manually, or automatically where PipeWire reports the sink's latency. It's small.
-   Suggested yes, in Phase 7.
-7. **Ubuntu targets:** 24.04 LTS and 26.04 LTS, on x64 and arm64. 22.04 still uses
-   PulseAudio by default, so leave it out.
-8. **Windows targets:** Windows 10 22H2 and Windows 11 on x64. Add arm64 later. Rust and
-   wgpu support it, and it's one more CI target.
-9. **Packaging:** Flatpak plus `.deb`, and a zip plus winget. The Microsoft Store later.
-   Skip Snap and AppImage.
-10. **Code signing:** SignPath's free signing for open-source projects, for the Windows
-    binaries.
-11. **Store title:** "Sonorant – Music Visualizer" on Flathub, winget and the Microsoft
-    Store.
+- **Licence:** GPL-3.0-or-later keeps forks and store re-uploads open, and SignPath's free
+  signing needs an OSI-approved licence. Nostalgia+ had no licence file.
+- **Font:** IBM Plex Sans with Plex Mono, rather than the suggested Inter, for an
+  engineering character that suits a metering tool. Plex Mono sets the readouts, so
+  changing numbers don't jitter.
+- **Targets:** the development PC is the low-end floor. Its integrated GPU has no
+  Direct3D 12 or Vulkan driver, so it is measured on the GeForce 840M.
+- **History:** with the time-axis mip chain, 5 minutes of stereo history takes about
+  295 MB of GPU memory, right at the 300 MB target. Phase 3 measures it; the length
+  setting is the lever if it's over.
+- **Ubuntu 22.04** is out: it still sends audio through PulseAudio by default, so native
+  PipeWire capture sees nothing there.
+- **Windows 10** keeps single-app capture: process loopback works from build 19041.
+  Windows 10 left mainstream support in October 2025 and consumer security updates end
+  in October 2026.
 
 ## Appendix: choosing the name
 
