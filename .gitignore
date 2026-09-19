@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# Frame-pacing logs written by `sonorant --pacing-log`
+/pacing-*.csv

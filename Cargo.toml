@@ -1,0 +1,78 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/sonorant-dsp",
+    "crates/sonorant-testdata",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/nifraz/sonorant"
+publish = false
+
+[workspace.dependencies]
+sonorant-dsp = { path = "crates/sonorant-dsp" }
+sonorant-core = { path = "crates/sonorant-core" }
+sonorant-platform = { path = "crates/sonorant-platform" }
+sonorant-render = { path = "crates/sonorant-render" }
+sonorant-testdata = { path = "crates/sonorant-testdata" }
+
+# wgpu, winit and egui move together: egui-wgpu names one wgpu major and egui-winit one
+# winit minor, so these four are only ever upgraded in one change.
+wgpu = "30.0.1"
+winit = "0.30.13"
+egui = "0.36.2"
+egui-wgpu = { version = "0.36.2", default-features = false, features = ["winit"] }
+egui-winit = { version = "0.36.2", default-features = false, features = ["accesskit", "clipboard", "links", "wayland", "x11"] }
+
+rustfft = "6.4.1"
+rtrb = "0.4.0"
+triple_buffer = "9.0.0"
+bytemuck = { version = "1.25.2", features = ["derive"] }
+half = { version = "2.7.1", features = ["bytemuck"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+toml = "1.1.6"
+log = "0.4.34"
+env_logger = { version = "0.11.11", default-features = false, features = ["auto-color", "humantime"] }
+pollster = "1.0.1"
+# 0.5: later versions build a C file (alloca), which the GNU toolchain here cannot.
+criterion = { version = "0.5.1", default-features = false, features = ["cargo_bench_support"] }
+# The same major wgpu uses, so there's one copy.
+windows = "0.62.2"
+windows-core = "0.62.2"
+pipewire = "0.10.1"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+print_stdout = "warn"
+undocumented_unsafe_blocks = "warn"
+
+# The DSP and its reference tests run thousands of large FFTs; an unoptimised build
+# makes `cargo test` crawl for no benefit.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev.package.sonorant-dsp]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = "symbols"
+panic = "abort"
+
+# For profiling and frame-pacing runs: release speed, with symbols.
+[profile.profiling]
+inherits = "release"
+strip = "none"
+debug = "line-tables-only"
