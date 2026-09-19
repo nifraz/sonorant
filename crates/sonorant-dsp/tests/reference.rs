@@ -354,7 +354,11 @@ fn generate(spec: &Value, rate: f64, total: usize) -> Vec<f64> {
             let seg = (rate * spec.f("segment_seconds")) as usize;
             let (even, odd) = (spec.f("amp_even"), spec.f("amp_odd"));
             for (i, v) in x.iter_mut().enumerate() {
-                let a = if (i / seg) % 2 == 0 { even } else { odd };
+                let a = if (i / seg).is_multiple_of(2) {
+                    even
+                } else {
+                    odd
+                };
                 *v = a * (2.0 * PI * f * i as f64 / rate).sin();
             }
         }

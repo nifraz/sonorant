@@ -288,12 +288,13 @@ impl MusicFeatures {
         }
         if self.octave_check {
             // Half the lag, give or take a hop for the rounding.
-            let half = (best_lag + 1) / 2;
+            let half = best_lag.div_ceil(2);
             let candidates = half.saturating_sub(1).max(min_lag)..=(half + 1).min(max_lag);
-            if let Some(lag) = candidates.max_by(|&a, &b| self.corr[a].total_cmp(&self.corr[b])) {
-                if lag < best_lag && self.corr[lag] >= OCTAVE_RATIO * best {
-                    best_lag = lag;
-                }
+            if let Some(lag) = candidates.max_by(|&a, &b| self.corr[a].total_cmp(&self.corr[b]))
+                && lag < best_lag
+                && self.corr[lag] >= OCTAVE_RATIO * best
+            {
+                best_lag = lag;
             }
         }
         60.0 * self.hop_rate / best_lag as f64

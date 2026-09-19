@@ -44,10 +44,10 @@ impl AudioInput {
         let wanted = frames.len() & !1;
         let space = self.ring.slots() & !1;
         let n = wanted.min(space);
-        if n > 0 {
-            if let Ok(chunk) = self.ring.write_chunk_uninit(n) {
-                chunk.fill_from_iter(frames[..n].iter().copied());
-            }
+        if n > 0
+            && let Ok(chunk) = self.ring.write_chunk_uninit(n)
+        {
+            chunk.fill_from_iter(frames[..n].iter().copied());
         }
         if n < wanted {
             self.dropped
@@ -59,10 +59,10 @@ impl AudioInput {
     /// sources that can wait, such as a file played faster than real time.
     pub fn push_some(&mut self, frames: &[f32]) -> usize {
         let n = (frames.len() & !1).min(self.ring.slots() & !1);
-        if n > 0 {
-            if let Ok(chunk) = self.ring.write_chunk_uninit(n) {
-                chunk.fill_from_iter(frames[..n].iter().copied());
-            }
+        if n > 0
+            && let Ok(chunk) = self.ring.write_chunk_uninit(n)
+        {
+            chunk.fill_from_iter(frames[..n].iter().copied());
         }
         n
     }

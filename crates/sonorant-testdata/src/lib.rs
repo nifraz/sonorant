@@ -44,7 +44,7 @@ pub fn signal(name: &str, sample_rate: f64) -> Signal {
     );
     let frames = bytes.len() / 16;
     let (mut left, mut right) = (Vec::with_capacity(frames), Vec::with_capacity(frames));
-    for frame in bytes.chunks_exact(16) {
+    for frame in bytes.as_chunks::<16>().0 {
         let l = f64::from_le_bytes(frame[..8].try_into().unwrap());
         let r = f64::from_le_bytes(frame[8..].try_into().unwrap());
         assert_eq!(l as f32 as f64, l, "{name}: sample is not an f32");

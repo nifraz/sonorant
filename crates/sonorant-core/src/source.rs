@@ -147,26 +147,34 @@ impl Wav {
         let samples: Vec<f32> = match (tag, bits) {
             (1, 8) => data.iter().map(|&b| (b as f32 - 128.0) / 128.0).collect(),
             (1, 16) => data
-                .chunks_exact(2)
-                .map(|c| i16::from_le_bytes([c[0], c[1]]) as f32 / 32768.0)
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|&c| i16::from_le_bytes(c) as f32 / 32768.0)
                 .collect(),
             (1, 24) => data
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .map(|c| (i32::from_le_bytes([0, c[0], c[1], c[2]]) >> 8) as f32 / 8_388_608.0)
                 .collect(),
             (1, 32) => data
-                .chunks_exact(4)
-                .map(|c| {
-                    (i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f64 / 2_147_483_648.0) as f32
-                })
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|&c| (i32::from_le_bytes(c) as f64 / 2_147_483_648.0) as f32)
                 .collect(),
             (3, 32) => data
-                .chunks_exact(4)
-                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|&c| f32::from_le_bytes(c))
                 .collect(),
             (3, 64) => data
-                .chunks_exact(8)
-                .map(|c| f64::from_le_bytes(c.try_into().expect("8 bytes")) as f32)
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|&c| f64::from_le_bytes(c) as f32)
                 .collect(),
             _ => {
                 return Err(bad(&format!(

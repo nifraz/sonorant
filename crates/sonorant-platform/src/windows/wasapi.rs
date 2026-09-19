@@ -448,9 +448,9 @@ unsafe fn pump(
             }
             let (mut data, mut frames, mut flags) = (std::ptr::null_mut(), 0u32, 0u32);
             // SAFETY: out-pointers are valid locals.
-            if let Err(e) =
-                unsafe { capture.GetBuffer(&mut data, &mut frames, &mut flags, None, None) }
-            {
+            let buffer =
+                unsafe { capture.GetBuffer(&mut data, &mut frames, &mut flags, None, None) };
+            if let Err(e) = buffer {
                 if e.code().0 == DEVICE_INVALIDATED {
                     return Ok(Ended::Reopen);
                 }
@@ -599,6 +599,7 @@ mod tests {
             .iter()
             .flat_map(|s| s.to_le_bytes())
             .collect();
+        // SAFETY: one four-channel float frame.
         unsafe { convert(data.as_ptr(), 1, &f, &mut out) };
         assert_eq!(out, [0.1, 0.2]);
     }

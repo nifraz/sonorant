@@ -315,7 +315,7 @@ impl Engine {
             let n = chunk.len() / 2;
             let mut l = [0.0f32; METER_CHUNK];
             let mut r = [0.0f32; METER_CHUNK];
-            for (i, f) in chunk.chunks_exact(2).enumerate() {
+            for (i, f) in chunk.as_chunks::<2>().0.iter().enumerate() {
                 l[i] = f[0];
                 r[i] = f[1];
             }

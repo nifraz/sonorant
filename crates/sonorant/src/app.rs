@@ -198,10 +198,10 @@ impl App {
                 Err(e) => log::error!("cannot write {}: {e}", path.display()),
             }
         }
-        if let Some(store) = &r.store {
-            if let Err(e) = store.save(&r.settings) {
-                log::error!("cannot save settings in {}: {e}", store.dir().display());
-            }
+        if let Some(store) = &r.store
+            && let Err(e) = store.save(&r.settings)
+        {
+            log::error!("cannot save settings in {}: {e}", store.dir().display());
         }
     }
 }
@@ -312,11 +312,11 @@ impl ApplicationHandler<UserEvent> for App {
                     event_loop.exit();
                     return;
                 }
-                if let Some(limit) = self.options.pacing_seconds {
-                    if self.started.elapsed().as_secs_f64() >= limit {
-                        event_loop.exit();
-                        return;
-                    }
+                if let Some(limit) = self.options.pacing_seconds
+                    && self.started.elapsed().as_secs_f64() >= limit
+                {
+                    event_loop.exit();
+                    return;
                 }
                 r.window.request_redraw();
             }
@@ -590,10 +590,8 @@ impl Running {
         self.settings.rows_per_second = new.rows_per_second as f64;
         self.settings.pair_mode = new.pair_mode;
         self.settings.scale = new.scale;
-        if analysis_changed {
-            if let Some(audio) = &self.audio {
-                audio.set_config(AnalysisConfig::from_settings(&self.settings, self.columns));
-            }
+        if analysis_changed && let Some(audio) = &self.audio {
+            audio.set_config(AnalysisConfig::from_settings(&self.settings, self.columns));
         }
         if new.present_mode != old.present_mode {
             self.gpu.set_present_mode(new.present_mode);

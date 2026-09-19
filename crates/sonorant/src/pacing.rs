@@ -63,7 +63,7 @@ impl FramePacing {
         let interval = self.last.map(|t| now.saturating_duration_since(t));
         self.last = Some(now);
         self.frames += 1;
-        let Some(dt) = interval else { return None };
+        let dt = interval?;
         // The first interval comes with the second frame.
         if self.frames - 1 <= WARM_UP_FRAMES {
             return interval;
