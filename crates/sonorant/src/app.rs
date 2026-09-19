@@ -9,8 +9,9 @@ use sonorant_core::runtime::PaneCurves;
 use sonorant_core::settings::{CurveStyle, Settings};
 use sonorant_core::store::{self, Store};
 use sonorant_render::{
-    CurveData, CurveLook, CurvePass, CurveView, HistoryStore, Layer, Overlay, PaneView, Readback,
-    Rect, RowIn, ScopeLayout, SpectrogramPass, axes,
+    BandLayout, CurveData, CurveLook, CurvePass, CurveView, DeckState, HistoryStore, Layer,
+    Overlay, PaneView, Readback, Rect, RowIn, ScopeLayout, SpectrogramPass, TrackInfo, WaveRing,
+    axes, deck,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
@@ -27,6 +28,8 @@ use crate::ui::{self, Status, UiState};
 
 /// How often the status line's numbers change, so they can be read.
 const STATUS_EVERY: Duration = Duration::from_millis(250);
+/// The colour bar's column down the right edge, in pixels.
+const COLOUR_BAR_WIDTH: i32 = 40;
 /// A frame interval this long is logged with where the time went.
 const STALL: Duration = Duration::from_millis(100);
 
@@ -69,6 +72,12 @@ struct Running {
     /// The newest curves and the range they were measured against.
     latest: Vec<PaneCurves>,
     range: (f64, f64),
+    analysis: f64,
+    bpm: f64,
+    /// The spectral centroid, 0 to 1 along the display axis.
+    brightness: f64,
+    scope: (Vec<f32>, Vec<f32>),
+    loudness: sonorant_core::dsp::LoudnessReadings,
     /// The average spectrum of each pane when the reference was taken, drawn in amber
     /// until it's dropped.
     reference: Option<Vec<Vec<f32>>>,
@@ -76,6 +85,13 @@ struct Running {
     settings: Settings,
     store: Option<Store>,
     layout: ScopeLayout,
+    /// The bottom band: waveform lanes and the centre deck.
+    band: BandLayout,
+    last_band: BandLayout,
+    /// The colour bar down the right edge, or empty.
+    colour_bar: Rect,
+    waves: WaveRing,
+    track: TrackInfo,
     columns: usize,
     held: Option<u64>,
     pacing: FramePacing,
@@ -206,9 +222,6 @@ impl App {
                 )
             }),
             status: Status {
-                adapter: gpu.adapter_info.name.clone(),
-                backend: format!("{:?}", gpu.adapter_info.backend),
-                present_mode: format!("{:?}", gpu.config.present_mode),
                 ..Status::default()
             },
             window,
@@ -223,11 +236,21 @@ impl App {
             lut,
             latest: Vec::new(),
             range: (-95.0, -5.0),
+            analysis: 0.0,
+            bpm: 0.0,
+            brightness: 0.0,
+            scope: (Vec::new(), Vec::new()),
+            loudness: sonorant_core::dsp::LoudnessReadings::default(),
             reference: None,
             audio,
             settings,
             store,
             layout: ScopeLayout::default(),
+            band: BandLayout::default(),
+            last_band: BandLayout::default(),
+            colour_bar: Rect::EMPTY,
+            waves: WaveRing::new(4096),
+            track: TrackInfo::default(),
             columns,
             held: None,
             pacing: FramePacing::new(refresh_hz),
@@ -505,6 +528,7 @@ impl Running {
             audio.poll();
             let history = &mut self.history;
             let queue = &self.gpu.queue;
+            let waves = &mut self.waves;
             audio.take_rows(|r| {
                 history.push(
                     queue,
@@ -516,13 +540,18 @@ impl Running {
                         a: &r.a,
                         b: &r.b,
                     },
-                )
+                );
+                waves.push(r.wave);
             });
             let s = audio.latest(now);
             self.latest.clone_from(&s.panes);
             self.range = (s.floor_db, s.ceiling_db);
-            self.status.loudness = Some(s.loudness);
-            self.status.bpm = s.bpm;
+            self.analysis = s.analysis_seconds;
+            self.bpm = s.bpm;
+            self.brightness = s.centroid;
+            self.scope.0.clone_from(&s.scope_left);
+            self.scope.1.clone_from(&s.scope_right);
+            self.loudness = s.loudness;
             self.status.dropped = (s.dropped_frames, s.dropped_rows);
             rate = if s.sample_rate > 0.0 {
                 s.sample_rate
@@ -539,10 +568,6 @@ impl Running {
             self.status_at = now;
             self.status.pacing = self.pacing.recent();
             self.status.presented = self.presented.counts();
-            self.status.size = [self.gpu.config.width, self.gpu.config.height];
-            self.status.scale = self.window.scale_factor();
-            self.status.rows_written = self.history.written();
-            self.status.present_mode = format!("{:?}", self.gpu.config.present_mode);
         }
 
         // The UI first, so the visuals know the space left to them.
@@ -550,7 +575,7 @@ impl Running {
         let mut area = egui::Rect::NOTHING;
         let present_modes = self.gpu.present_modes.clone();
         let mut full_output = self.egui_ctx.run_ui(raw_input, |ui| {
-            area = ui::show(ui, &mut self.ui, &self.status, &present_modes);
+            area = ui::show(ui, &mut self.ui, &present_modes);
         });
         let mut textures = std::mem::take(&mut full_output.textures_delta);
         self.egui_state
@@ -569,12 +594,21 @@ impl Running {
         }
 
         // The panes, in physical pixels so the history keeps its detail at any scaling.
-        let bounds = Rect::new(
+        let client = Rect::new(
             (area.min.x * ppp).round() as i32,
             (area.min.y * ppp).round() as i32,
             (area.width() * ppp).round() as i32,
             (area.height() * ppp).round() as i32,
         );
+        let bar_w = if self.settings.show_color_bar {
+            COLOUR_BAR_WIDTH
+        } else {
+            0
+        };
+        self.colour_bar = Rect::new(client.right() - bar_w, client.y, bar_w, client.h);
+        let view = Rect::new(client.x, client.y, (client.w - bar_w).max(16), client.h);
+        let band_h = BandLayout::height_for(&self.settings, view.h);
+        let bounds = Rect::new(view.x, view.y, view.w, (view.h - band_h).max(16));
         self.layout = ScopeLayout::new(bounds, &self.settings);
         if self.layout.columns() != self.columns {
             self.columns = self.layout.columns();
@@ -614,6 +648,42 @@ impl Running {
         self.prepare_curves();
         self.overlay
             .begin(self.gpu.config.width, self.gpu.config.height);
+        let label_px = axes::label_px(&self.settings, ppp);
+        // The deck's geometry depends on how wide a few strings are.
+        let overlay = &mut self.overlay;
+        let mut measure = |text: &str| {
+            overlay
+                .measure(text, sonorant_render::Face::Sans, label_px)
+                .w
+        };
+        self.band = BandLayout::new(
+            Rect::new(
+                self.layout.bounds.x,
+                self.layout.bounds.y,
+                self.layout.bounds.w,
+                self.layout.bounds.h + band_h,
+            ),
+            band_h,
+            &self.settings,
+            &self.layout.panes,
+            &mut measure,
+        );
+        self.waves
+            .resize(self.band.wave_a.w.max(self.band.wave_b.w).max(8) as usize);
+        if log::log_enabled!(log::Level::Debug) && self.band != self.last_band {
+            self.last_band = self.band;
+            log::debug!("band {:?}", self.band);
+        }
+
+        // The status line is chrome over the image: it starts below the scale lane, and
+        // labels drawn over the image step below it in turn.
+        let chrome_top = self
+            .layout
+            .panes
+            .first()
+            .filter(|p| p.lane.h > 0 && p.lane.y <= p.bounds.y)
+            .map_or(0.0, |p| p.lane.h as f32);
+        let inset = if self.settings.show_status { 14.0 } else { 0.0 };
         let scales = axes::Scales {
             layout: &self.layout,
             settings: &self.settings,
@@ -623,10 +693,58 @@ impl Running {
             px_per_second: rps * self.ui.px_per_row as f64,
             scale: ppp,
             alpha: 1.0,
-            top_inset: 0.0,
-            label_floor_y: 0.0,
+            top_inset: inset,
+            label_floor_y: if self.settings.show_status {
+                chrome_top + inset + 16.0
+            } else {
+                0.0
+            },
         };
         axes::draw(&mut self.overlay, &scales);
+        let state = DeckState {
+            loudness: &self.loudness,
+            bpm: self.bpm,
+            brightness_hz: map.x_to_freq(self.brightness * map.width as f64),
+            scope_left: &self.scope.0,
+            scope_right: &self.scope.1,
+            track: &self.track,
+            position: None,
+            playing: false,
+        };
+        deck::draw_band(
+            &mut self.overlay,
+            &self.band,
+            &self.layout.panes,
+            &self.settings,
+            &self.lut,
+            &self.waves,
+            &state,
+            1.0,
+            label_px,
+        );
+        if self.settings.show_color_bar {
+            deck::draw_colour_bar(
+                &mut self.overlay,
+                self.colour_bar,
+                &self.settings,
+                &self.lut,
+                self.range.0,
+                self.range.1,
+                1.0,
+                label_px,
+            );
+        }
+        if self.settings.show_status {
+            let status = self.status_line();
+            deck::draw_status(
+                &mut self.overlay,
+                &self.settings,
+                &status,
+                chrome_top,
+                1.0,
+                label_px,
+            );
+        }
         self.overlay.prepare(&self.gpu.device, &self.gpu.queue);
 
         let mut encoder = self
@@ -756,6 +874,44 @@ impl Running {
         for id in textures.free.drain() {
             self.egui_renderer.free_texture(&id);
         }
+    }
+
+    /// What the status line says: the source, the transform sizes, the channel pair,
+    /// the frame rate, what analysis costs and the preset.
+    fn status_line(&self) -> String {
+        let (sizes, _) = self.settings.quality.profile();
+        let resolution: Vec<String> = sizes
+            .iter()
+            .map(|&n| {
+                if n >= 1024 {
+                    format!("{}K", n / 1024)
+                } else {
+                    n.to_string()
+                }
+            })
+            .collect();
+        let pacing = self.pacing.recent();
+        let missed = self.status.presented.map_or(pacing.missed, |c| c.repeated);
+        let mut line = format!(
+            "{}  |  {}  |  {}  |  {:.0} fps  |  {:.1} ms  |  {}",
+            self.status.capture,
+            resolution.join(" / "),
+            self.settings.pair_mode.name(),
+            pacing.fps,
+            self.analysis * 1000.0,
+            self.settings.preset.name(),
+        );
+        if missed > 0 {
+            line += &format!("  |  {missed} missed");
+        }
+        let (frames, rows) = self.status.dropped;
+        if frames > 0 || rows > 0 {
+            line += &format!("  |  dropped {frames} frames, {rows} rows");
+        }
+        if self.ui.frozen {
+            line += "  |  FROZEN";
+        }
+        line
     }
 
     /// Uploads the curve strips for this frame's layout.

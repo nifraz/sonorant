@@ -15,7 +15,6 @@ pub struct Gpu {
     /// The format the visuals render through: the swapchain's sRGB view, so shaders work
     /// in linear light and the hardware encodes.
     pub view_format: wgpu::TextureFormat,
-    pub adapter_info: wgpu::AdapterInfo,
     pub present_modes: Vec<wgpu::PresentMode>,
 }
 
@@ -185,7 +184,6 @@ impl Gpu {
             queue,
             config,
             view_format,
-            adapter_info,
             present_modes: caps.present_modes,
         })
     }

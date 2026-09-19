@@ -112,6 +112,8 @@ pub struct Hop<'a> {
     pub frames: u64,
     /// False until there's enough audio for the largest transform.
     pub analysed: bool,
+    /// What this hop's analysis took, in seconds.
+    pub seconds: f64,
     pub floor_db: f64,
     pub ceiling_db: f64,
     /// The panes: one for single-channel modes, two otherwise.
@@ -371,6 +373,7 @@ impl Engine {
     }
 
     fn hop(&mut self, sink: &mut impl Sink) {
+        let started = std::time::Instant::now();
         let index = self.hops;
         self.hops += 1;
         let dt = 1.0 / self.hop_rate;
@@ -455,6 +458,7 @@ impl Engine {
             index,
             frames: self.frames,
             analysed,
+            seconds: started.elapsed().as_secs_f64(),
             floor_db: self.floor_db,
             ceiling_db: self.ceiling_db,
             panes: &self.panes,

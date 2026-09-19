@@ -115,6 +115,8 @@ pub struct Snapshot {
     pub frames: u64,
     pub sample_rate: f64,
     pub analysed: bool,
+    /// What the last hop's analysis took, in seconds, smoothed over a second.
+    pub analysis_seconds: f64,
     pub floor_db: f64,
     pub ceiling_db: f64,
     pub panes: Vec<PaneCurves>,
@@ -289,6 +291,8 @@ impl Sink for Publisher {
         s.frames = h.frames;
         s.sample_rate = self.sample_rate;
         s.analysed = h.analysed;
+        // Smoothed, or the status line's figure is unreadable.
+        s.analysis_seconds += (h.seconds - s.analysis_seconds) * 0.05;
         s.floor_db = h.floor_db;
         s.ceiling_db = h.ceiling_db;
         s.panes.resize_with(h.panes.len(), PaneCurves::default);

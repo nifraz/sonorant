@@ -3,7 +3,7 @@
 //! Phase 5 replaces the menu with one built from the menu model; this one exercises the
 //! pieces that model will drive: checkboxes, radio groups, submenus and shortcuts.
 
-use sonorant_core::dsp::{ChannelPairMode, FreqScale, LoudnessReadings};
+use sonorant_core::dsp::{ChannelPairMode, FreqScale};
 use sonorant_core::palette::PaletteKind;
 use sonorant_core::settings::Settings;
 
@@ -50,15 +50,7 @@ pub struct Status {
     pub pacing: PacingStats,
     /// What reached the screen, where the platform counts it.
     pub presented: Option<PresentCounts>,
-    pub adapter: String,
-    pub backend: String,
-    pub present_mode: String,
-    pub size: [u32; 2],
-    pub scale: f64,
-    pub rows_written: u64,
     pub capture: String,
-    pub loudness: Option<LoudnessReadings>,
-    pub bpm: f64,
     /// Audio frames and history rows lost.
     pub dropped: (u64, u64),
 }
@@ -67,60 +59,10 @@ pub struct Status {
 pub fn show(
     ui: &mut egui::Ui,
     state: &mut UiState,
-    status: &Status,
     present_modes: &[wgpu::PresentMode],
 ) -> egui::Rect {
-    if state.show_status {
-        egui::Panel::bottom("status").show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(&status.capture);
-                if let Some(l) = &status.loudness {
-                    ui.separator();
-                    ui.monospace(format!(
-                        "M {:5.1}  S {:5.1}  I {:5.1} LUFS  TP {:5.1} dBTP",
-                        l.momentary, l.short_term, l.integrated, l.true_peak_db
-                    ));
-                }
-                if status.bpm > 0.0 {
-                    ui.separator();
-                    ui.monospace(format!("{:.0} BPM", status.bpm));
-                }
-                if status.dropped != (0, 0) {
-                    ui.separator();
-                    ui.colored_label(
-                        ui.visuals().warn_fg_color,
-                        format!(
-                            "dropped {} frames, {} rows",
-                            status.dropped.0, status.dropped.1
-                        ),
-                    );
-                }
-                ui.separator();
-                let p = &status.pacing;
-                let refresh = p
-                    .refresh_hz
-                    .map(|hz| format!(" at {hz:.0} Hz"))
-                    .unwrap_or_default();
-                // Refreshes that repeated a frame when the swapchain counts them, else
-                // an estimate from the frame intervals.
-                let missed = status.presented.map_or(p.missed, |c| c.repeated);
-                ui.monospace(format!(
-                    "{:5.1} fps  p99 {:5.2} ms  missed {missed}{refresh}",
-                    p.fps, p.p99_ms
-                ));
-                ui.separator();
-                ui.label(format!(
-                    "{} ({}, {})",
-                    status.adapter, status.backend, status.present_mode
-                ));
-                if state.frozen {
-                    ui.separator();
-                    ui.strong("frozen");
-                }
-            });
-        });
-    }
-
+    // The status line itself is drawn by the renderer, over the image, where
+    // Nostalgia+ had it; egui only carries the menu.
     let mut area = egui::Rect::NOTHING;
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE)

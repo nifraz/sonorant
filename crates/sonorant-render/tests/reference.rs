@@ -2,6 +2,7 @@
 
 use sonorant_core::dsp::ChannelPairMode;
 use sonorant_core::settings::Settings;
+use sonorant_render::DeckLayout;
 use sonorant_render::layout::{Rect, ScopeLayout};
 use sonorant_testdata::{Value, ValueExt, json};
 
@@ -58,5 +59,59 @@ fn stereo_view_panes_match() {
             );
         }
         assert_eq!(l.columns(), case["map"].u("width"), "{id} columns");
+    }
+}
+
+/// Segoe UI at 7 pt, as GDI+ measured the four strings the deck's geometry depends on
+/// when these rectangles were exported. The deck asks how wide text is, so reproducing
+/// its rules needs the same answers; the app measures IBM Plex instead and lands within
+/// a few pixels.
+fn segoe_7pt(text: &str) -> f32 {
+    match text {
+        "CORR" | "BAL" | "+0.00" => 27.0,
+        "00:00 / 00:00" => 57.0,
+        _ => text.len() as f32 * 6.0,
+    }
+}
+
+#[test]
+fn centre_deck_layouts_match() {
+    let doc = json("layout.json");
+    let cases = doc.arr("center_deck");
+    assert!(!cases.is_empty());
+    for case in cases {
+        let mut s = Settings::default();
+        if case.s("settings") == "readouts_and_info_off" {
+            s.deck_show_track_info = false;
+            for on in [
+                &mut s.deck_show_lufs_m,
+                &mut s.deck_show_lufs_s,
+                &mut s.deck_show_lufs_i,
+                &mut s.deck_show_lra,
+                &mut s.deck_show_true_peak,
+                &mut s.deck_show_crest,
+                &mut s.deck_show_overs,
+                &mut s.deck_show_bpm,
+                &mut s.deck_show_brightness,
+            ] {
+                *on = false;
+            }
+        }
+        let (w, h) = (case.u("width") as i32, case.u("height") as i32);
+        let d = DeckLayout::new(Rect::new(0, 0, w, h), &s, &mut segoe_7pt);
+        let id = format!("{w}x{h} {}", case.s("settings"));
+        for (name, ours) in [
+            ("art", d.art),
+            ("info", d.info),
+            ("goniometer", d.goniometer),
+            ("stack", d.stack),
+            ("loudness", d.loudness),
+            ("seek", d.seek),
+            ("correlation", d.correlation),
+            ("balance", d.balance),
+            ("bar_column", d.bar),
+        ] {
+            assert_eq!(ours, rect(&case[name]), "{id} {name}");
+        }
     }
 }

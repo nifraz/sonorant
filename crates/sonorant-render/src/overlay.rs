@@ -291,6 +291,18 @@ impl Overlay {
         ]);
     }
 
+    /// A filled triangle through three pixel positions.
+    pub fn triangle(&mut self, layer: Layer, points: [(f32, f32); 3], colour: Rgba) {
+        if colour.a <= 0.0 {
+            return;
+        }
+        self.shapes[layer as usize].extend(points.map(|(x, y)| Vertex {
+            pos: [x, y],
+            colour: colour.to_array(),
+            ..Vertex::default()
+        }));
+    }
+
     /// A one-pixel horizontal line across pixel row `y`, from column `x0` up to `x1`.
     pub fn hline(&mut self, layer: Layer, x0: f32, x1: f32, y: f32, colour: Rgba) {
         self.rect(layer, x0.min(x1), y, (x1 - x0).abs(), 1.0, colour);
