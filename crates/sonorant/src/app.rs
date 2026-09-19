@@ -18,10 +18,13 @@ use crate::audio::{Audio, Input};
 use crate::gpu::Gpu;
 use crate::options::Options;
 use crate::pacing::FramePacing;
+use crate::present::PresentMonitor;
 use crate::ui::{self, Status, UiState};
 
 /// How often the status line's numbers change, so they can be read.
 const STATUS_EVERY: Duration = Duration::from_millis(250);
+/// A frame interval this long is logged with where the time went.
+const STALL: Duration = Duration::from_millis(100);
 
 /// Events sent to the loop from other threads.
 #[derive(Debug)]
@@ -44,6 +47,9 @@ pub struct App {
 }
 
 struct Running {
+    /// Start-up's timings, until the first frame is on its way to the screen.
+    steps: Option<Steps>,
+    started: Instant,
     window: Arc<Window>,
     gpu: Gpu,
     egui_ctx: egui::Context,
@@ -58,6 +64,9 @@ struct Running {
     columns: usize,
     held: Option<u64>,
     pacing: FramePacing,
+    presented: PresentMonitor,
+    /// How long the last frame's CPU work took, from acquire to present.
+    last_work: Duration,
     ui: UiState,
     applied: UiState,
     status: Status,
@@ -82,7 +91,22 @@ impl App {
     }
 
     fn start(&mut self, event_loop: &ActiveEventLoop) -> Result<Running, String> {
+        let mut steps = Steps::new(self.started);
         let (settings, store) = load_settings();
+        steps.mark("settings");
+
+        // Capture opens on a thread of its own while the window and the GPU do.
+        let input = match (&self.options.wav, &self.options.app) {
+            (Some(path), _) => Input::File(path.clone()),
+            (None, Some(app)) => Input::App(app.clone()),
+            (None, None) => Input::System,
+        };
+        let columns = 512;
+        let audio_config = AnalysisConfig::from_settings(&settings, columns);
+        let opening = std::thread::Builder::new()
+            .name("sonorant-open-capture".into())
+            .spawn(move || Audio::start(&input, audio_config))
+            .map_err(|e| format!("cannot start a thread: {e}"))?;
 
         let mut attributes = Window::default_attributes()
             .with_title("Sonorant")
@@ -98,15 +122,10 @@ impl App {
                 .create_window(attributes)
                 .map_err(|e| e.to_string())?,
         );
+        steps.mark("window");
 
-        let mut desc = wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(
-            event_loop.owned_display_handle(),
-        ));
-        if let Some(backends) = self.options.backends {
-            desc.backends = backends;
-        }
-        let instance = wgpu::Instance::new(desc);
-        let gpu = Gpu::new(&instance, window.clone(), &self.options)?;
+        let gpu = Gpu::open(event_loop, window.clone(), &self.options)?;
+        steps.mark("gpu");
 
         let egui_ctx = egui::Context::default();
         let mut egui_state = egui_winit::State::new(
@@ -123,6 +142,7 @@ impl App {
             gpu.config.format,
             egui_wgpu::RendererOptions::default(),
         );
+        steps.mark("ui");
 
         // Five minutes at the settings' scroll speed.
         let rows = (settings.rows_per_second.max(1.0) * 300.0) as u32;
@@ -130,24 +150,24 @@ impl App {
         let mut spectrogram = SpectrogramPass::new(&gpu.device, gpu.view_format);
         spectrogram.bind(&gpu.device, &history);
         spectrogram.set_palette(&gpu.queue, &palette::build_lut(settings.palette));
+        steps.mark("renderer");
 
-        let input = match (&self.options.wav, &self.options.app) {
-            (Some(path), _) => Input::File(path.clone()),
-            (None, Some(app)) => Input::App(app.clone()),
-            (None, None) => Input::System,
-        };
-        let columns = 512;
-        let audio = match Audio::start(&input, AnalysisConfig::from_settings(&settings, columns)) {
-            Ok(a) => Some(a),
-            Err(e) => {
+        let audio = match opening.join() {
+            Ok(Ok(a)) => Some(a),
+            Ok(Err(e)) => {
                 log::error!("{e}");
                 None
             }
+            Err(_) => {
+                log::error!("opening the capture failed");
+                None
+            }
         };
+        steps.mark("capture");
 
         let mut ui = UiState::from_settings(&settings, self.options.fullscreen);
         ui.present_mode = gpu.config.present_mode;
-        let refresh_hz = refresh_rate(&window);
+        let refresh_hz = crate::present::compositor_refresh_hz().or_else(|| refresh_rate(&window));
         log::info!(
             "display: {} Hz, scale factor {:.2}; history holds {} rows",
             refresh_hz.map_or("unknown".to_owned(), |hz| format!("{hz:.2}")),
@@ -155,12 +175,11 @@ impl App {
             history.capacity()
         );
         window.set_visible(true);
+        steps.mark("show");
         let now = Instant::now();
-        log::info!(
-            "first frame after {:.0} ms",
-            now.duration_since(self.started).as_secs_f64() * 1000.0
-        );
         Ok(Running {
+            steps: Some(steps),
+            started: self.started,
             status: Status {
                 adapter: gpu.adapter_info.name.clone(),
                 backend: format!("{:?}", gpu.adapter_info.backend),
@@ -181,6 +200,8 @@ impl App {
             columns,
             held: None,
             pacing: FramePacing::new(refresh_hz),
+            presented: PresentMonitor::default(),
+            last_work: Duration::ZERO,
             applied: ui.clone(),
             ui,
             status_at: now,
@@ -192,6 +213,9 @@ impl App {
         let Some(r) = &self.running else { return };
         let overall = r.pacing.overall();
         log::info!("frame pacing: {overall}");
+        if let Some(counts) = r.presented.counts() {
+            log::info!("presentation: {counts}");
+        }
         if let Some(path) = &self.options.pacing_log {
             match r.pacing.write_csv(path) {
                 Ok(()) => log::info!("wrote frame intervals to {}", path.display()),
@@ -226,6 +250,42 @@ fn load_settings() -> (Settings, Option<Store>) {
         }
     }
     (store.load(), Some(store))
+}
+
+/// How long each part of start-up took, for the log.
+#[derive(Debug)]
+struct Steps {
+    started: Instant,
+    last: Instant,
+    parts: Vec<(&'static str, Duration)>,
+}
+
+impl Steps {
+    fn new(started: Instant) -> Steps {
+        Steps {
+            started,
+            last: started,
+            parts: Vec::new(),
+        }
+    }
+
+    fn mark(&mut self, name: &'static str) {
+        let now = Instant::now();
+        self.parts.push((name, now - self.last));
+        self.last = now;
+    }
+}
+
+impl std::fmt::Display for Steps {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+        write!(f, "{:.0} ms (", ms(self.last - self.started))?;
+        for (i, (name, d)) in self.parts.iter().enumerate() {
+            let sep = if i == 0 { "" } else { ", " };
+            write!(f, "{sep}{name} {:.0}", ms(*d))?;
+        }
+        write!(f, ")")
+    }
 }
 
 fn refresh_rate(window: &Window) -> Option<f64> {
@@ -354,6 +414,7 @@ fn srgb_to_linear(c: u8) -> f64 {
 
 impl Running {
     fn frame(&mut self) {
+        let asked = Instant::now();
         let frame = match self.gpu.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) => f,
             wgpu::CurrentSurfaceTexture::Suboptimal(f) => {
@@ -364,10 +425,12 @@ impl Running {
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.gpu.reconfigure();
                 self.pacing.break_sequence();
+                self.presented.reset();
                 return;
             }
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
                 self.pacing.break_sequence();
+                self.presented.reset();
                 return;
             }
             wgpu::CurrentSurfaceTexture::Validation => {
@@ -376,7 +439,19 @@ impl Running {
             }
         };
         let now = Instant::now();
-        self.pacing.record(now);
+        if let Some(interval) = self.pacing.record(now)
+            && interval >= STALL
+        {
+            let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+            log::warn!(
+                "stall at {:.1} s: {:.0} ms between frames; the last frame's work took {:.1} \
+                 ms, then {:.1} ms waiting for the swapchain",
+                self.started.elapsed().as_secs_f64(),
+                ms(interval),
+                ms(self.last_work),
+                ms(now - asked)
+            );
+        }
         self.apply_settings();
 
         // New rows and the newest analysis.
@@ -417,6 +492,7 @@ impl Running {
         if now.duration_since(self.status_at) >= STATUS_EVERY {
             self.status_at = now;
             self.status.pacing = self.pacing.recent();
+            self.status.presented = self.presented.counts();
             self.status.size = [self.gpu.config.width, self.gpu.config.height];
             self.status.scale = self.window.scale_factor();
             self.status.rows_written = self.history.written();
@@ -564,6 +640,12 @@ impl Running {
             .submit(extra.into_iter().chain(std::iter::once(encoder.finish())));
         self.window.pre_present_notify();
         self.gpu.queue.present(frame);
+        self.last_work = now.elapsed();
+        self.presented.sample(&self.gpu.surface);
+        if let Some(mut steps) = self.steps.take() {
+            steps.mark("first frame");
+            log::info!("start-up: {steps}");
+        }
 
         for id in textures.free.drain() {
             self.egui_renderer.free_texture(&id);
@@ -596,11 +678,15 @@ impl Running {
         if new.present_mode != old.present_mode {
             self.gpu.set_present_mode(new.present_mode);
             self.pacing.break_sequence();
+            self.presented.reset();
         }
         if new.fullscreen != old.fullscreen {
             self.window
                 .set_fullscreen(new.fullscreen.then_some(Fullscreen::Borderless(None)));
-            self.pacing.set_refresh_hz(refresh_rate(&self.window));
+            self.pacing.set_refresh_hz(
+                crate::present::compositor_refresh_hz().or_else(|| refresh_rate(&self.window)),
+            );
+            self.presented.reset();
         }
         self.applied = self.ui.clone();
     }

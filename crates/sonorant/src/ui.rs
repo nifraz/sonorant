@@ -8,6 +8,7 @@ use sonorant_core::palette::PaletteKind;
 use sonorant_core::settings::Settings;
 
 use crate::pacing::PacingStats;
+use crate::present::PresentCounts;
 
 /// What the menu and keys control.
 #[derive(Clone, Debug, PartialEq)]
@@ -47,6 +48,8 @@ impl UiState {
 #[derive(Clone, Debug, Default)]
 pub struct Status {
     pub pacing: PacingStats,
+    /// What reached the screen, where the platform counts it.
+    pub presented: Option<PresentCounts>,
     pub adapter: String,
     pub backend: String,
     pub present_mode: String,
@@ -98,9 +101,12 @@ pub fn show(
                     .refresh_hz
                     .map(|hz| format!(" at {hz:.0} Hz"))
                     .unwrap_or_default();
+                // Refreshes that repeated a frame when the swapchain counts them, else
+                // an estimate from the frame intervals.
+                let missed = status.presented.map_or(p.missed, |c| c.repeated);
                 ui.monospace(format!(
-                    "{:5.1} fps  p99 {:5.2} ms  missed {}{refresh}",
-                    p.fps, p.p99_ms, p.missed
+                    "{:5.1} fps  p99 {:5.2} ms  missed {missed}{refresh}",
+                    p.fps, p.p99_ms
                 ));
                 ui.separator();
                 ui.label(format!(

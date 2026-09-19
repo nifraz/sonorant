@@ -21,5 +21,10 @@ pollster = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+# DXGI's frame statistics, through wgpu-hal's swapchain. The same features wgpu-hal
+# already turns on, so this adds nothing to the build.
+windows = { workspace = true, features = ["Win32_Graphics_Dwm", "Win32_Graphics_Dxgi"] }
+
 [lints]
 workspace = true

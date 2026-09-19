@@ -1,8 +1,11 @@
 //! Frame pacing: how evenly frames reach the screen.
 //!
 //! Every frame records the moment it got its swapchain image. With vsync that moment
-//! follows the display, so the intervals between frames show the pacing directly: at
-//! 60 Hz they should all be close to 16.7 ms, and one near 33 ms is a missed refresh.
+//! follows the display, but only loosely: with frames queued ahead, the swapchain hands
+//! buffers back in bursts, and on the reference PC the intervals alternate around
+//! 15.5 and 31 ms while every refresh still gets a new frame. A long interval is not a
+//! missed refresh by itself. What is: fewer frames than the display refreshed in the
+//! same time, so that's what "missed" counts, from the exact refresh rate.
 
 use std::fmt;
 use std::io::{self, Write};
@@ -13,8 +16,6 @@ use std::time::{Duration, Instant};
 const WARM_UP_FRAMES: u64 = 30;
 /// Intervals kept for the live readout: a few seconds at any refresh rate.
 const RECENT: usize = 512;
-/// An interval this many refresh periods long or more counts as missed refreshes.
-const MISS_RATIO: f64 = 1.5;
 
 #[derive(Clone, Debug)]
 pub struct FramePacing {
@@ -24,7 +25,6 @@ pub struct FramePacing {
     recent: Vec<f32>,
     recent_head: usize,
     all_ms: Vec<f32>,
-    missed: u64,
 }
 
 /// Statistics over a set of frame intervals.
@@ -36,7 +36,8 @@ pub struct PacingStats {
     pub p50_ms: f64,
     pub p99_ms: f64,
     pub max_ms: f64,
-    /// Refreshes missed, estimated from intervals longer than 1.5 periods.
+    /// Refreshes without a new frame: the refreshes in the time the frames spanned,
+    /// less the frames.
     pub missed: u64,
     pub refresh_hz: Option<f64>,
 }
@@ -50,7 +51,6 @@ impl FramePacing {
             recent: Vec::with_capacity(RECENT),
             recent_head: 0,
             all_ms: Vec::new(),
-            missed: 0,
         }
     }
 
@@ -79,7 +79,6 @@ impl FramePacing {
         if self.all_ms.len() < 4_000_000 {
             self.all_ms.push(ms as f32);
         }
-        self.missed += missed_refreshes(ms, self.refresh_hz);
         interval
     }
 
@@ -95,9 +94,7 @@ impl FramePacing {
 
     /// Statistics over every frame since the warm-up.
     pub fn overall(&self) -> PacingStats {
-        let mut s = stats(&self.all_ms, self.refresh_hz);
-        s.missed = self.missed;
-        s
+        stats(&self.all_ms, self.refresh_hz)
     }
 
     /// Writes every recorded interval as CSV: frame number and milliseconds.
@@ -111,15 +108,13 @@ impl FramePacing {
     }
 }
 
-fn missed_refreshes(ms: f64, refresh_hz: Option<f64>) -> u64 {
+/// Refreshes in `span_ms` that didn't get one of `frames` frames.
+fn missed_refreshes(span_ms: f64, frames: usize, refresh_hz: Option<f64>) -> u64 {
     let Some(hz) = refresh_hz.filter(|&h| h > 0.0) else {
         return 0;
     };
-    let period = 1000.0 / hz;
-    if ms < period * MISS_RATIO {
-        return 0;
-    }
-    ((ms / period).round() as u64).saturating_sub(1)
+    let refreshes = span_ms * hz / 1000.0;
+    (refreshes - frames as f64).round().max(0.0) as u64
 }
 
 fn stats(intervals: &[f32], refresh_hz: Option<f64>) -> PacingStats {
@@ -132,7 +127,8 @@ fn stats(intervals: &[f32], refresh_hz: Option<f64>) -> PacingStats {
     let mut sorted: Vec<f64> = intervals.iter().map(|&v| v as f64).collect();
     sorted.sort_by(f64::total_cmp);
     let n = sorted.len();
-    let mean = sorted.iter().sum::<f64>() / n as f64;
+    let span: f64 = sorted.iter().sum();
+    let mean = span / n as f64;
     let at = |p: f64| sorted[((p * (n - 1) as f64).round() as usize).min(n - 1)];
     PacingStats {
         frames: n,
@@ -141,10 +137,7 @@ fn stats(intervals: &[f32], refresh_hz: Option<f64>) -> PacingStats {
         p50_ms: at(0.50),
         p99_ms: at(0.99),
         max_ms: sorted[n - 1],
-        missed: intervals
-            .iter()
-            .map(|&v| missed_refreshes(v as f64, refresh_hz))
-            .sum(),
+        missed: missed_refreshes(span, n, refresh_hz),
         refresh_hz,
     }
 }
@@ -201,6 +194,20 @@ mod tests {
         feed(&mut p, &v);
         assert_eq!(p.overall().missed, 3);
         assert_eq!(p.recent().missed, 3);
+    }
+
+    #[test]
+    fn late_frames_made_up_by_early_ones_miss_nothing() {
+        // What the swapchain hands back on the reference PC: bursts, but a frame for
+        // every refresh.
+        let mut p = FramePacing::new(Some(59.94));
+        let mut v = Vec::new();
+        for _ in 0..40 {
+            v.extend([15.5; 14]);
+            v.push(16.683 * 15.0 - 15.5 * 14.0);
+        }
+        feed(&mut p, &v);
+        assert_eq!(p.overall().missed, 0);
     }
 
     #[test]

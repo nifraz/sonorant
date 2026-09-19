@@ -12,6 +12,7 @@ mod audio;
 mod gpu;
 mod options;
 mod pacing;
+mod present;
 mod probe;
 mod ui;
 

@@ -40,7 +40,42 @@ fn device_rank(t: wgpu::DeviceType) -> u8 {
     }
 }
 
+/// The backend tried first: the platform's own. Opening every backend to compare them
+/// cost seconds at start-up (OpenGL and Vulkan each load and probe their drivers), so
+/// the others are only tried when this one finds nothing that can draw to the window.
+const PRIMARY: wgpu::Backends = if cfg!(windows) {
+    wgpu::Backends::DX12
+} else if cfg!(target_vendor = "apple") {
+    wgpu::Backends::METAL
+} else {
+    wgpu::Backends::VULKAN
+};
+
 impl Gpu {
+    /// Opens the GPU for `window`: the backend `--backend` asks for, or the platform's
+    /// own, falling back to the rest.
+    pub fn open(
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        window: Arc<Window>,
+        options: &Options,
+    ) -> Result<Gpu, String> {
+        let attempt = |backends: wgpu::Backends| {
+            let mut desc = wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(
+                event_loop.owned_display_handle(),
+            ));
+            desc.backends = backends;
+            let instance = wgpu::Instance::new(desc);
+            Gpu::new(&instance, window.clone(), options)
+        };
+        if let Some(backends) = options.backends {
+            return attempt(backends);
+        }
+        attempt(PRIMARY).or_else(|e| {
+            log::warn!("{e} on {PRIMARY:?}; trying the other backends");
+            attempt(wgpu::Backends::all() - PRIMARY)
+        })
+    }
+
     pub fn new(
         instance: &wgpu::Instance,
         window: Arc<Window>,
