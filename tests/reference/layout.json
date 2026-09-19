@@ -1,0 +1,727 @@
+{
+  "note": "Rectangles are [x, y, width, height] in pixels. Informative: text-driven sizes may differ in Sonorant.",
+  "center_deck": [
+    {
+      "width": 1200,
+      "height": 130,
+      "settings": "defaults",
+      "art": [6,6,118,118],
+      "info": [130,6,405,118],
+      "goniometer": [541,6,118,118],
+      "stack": [665,6,355,118],
+      "loudness": [1026,6,168,118],
+      "seek": [771,20,182,10],
+      "correlation": [665,45,355,39],
+      "balance": [665,84,355,39],
+      "bar_column": [771,6,182,118]
+    },
+    {
+      "width": 1200,
+      "height": 130,
+      "settings": "readouts_and_info_off",
+      "art": [6,6,118,118],
+      "info": [0,0,0,0],
+      "goniometer": [541,6,118,118],
+      "stack": [665,6,529,118],
+      "loudness": [0,0,0,0],
+      "seek": [771,20,356,10],
+      "correlation": [665,45,529,39],
+      "balance": [665,84,529,39],
+      "bar_column": [771,6,356,118]
+    },
+    {
+      "width": 1200,
+      "height": 110,
+      "settings": "defaults",
+      "art": [6,6,98,98],
+      "info": [110,6,435,98],
+      "goniometer": [551,6,98,98],
+      "stack": [655,6,253,98],
+      "loudness": [914,6,280,98],
+      "seek": [761,17,80,10],
+      "correlation": [655,38,253,32],
+      "balance": [655,70,253,32],
+      "bar_column": [761,6,80,98]
+    },
+    {
+      "width": 1200,
+      "height": 110,
+      "settings": "readouts_and_info_off",
+      "art": [6,6,98,98],
+      "info": [0,0,0,0],
+      "goniometer": [551,6,98,98],
+      "stack": [655,6,539,98],
+      "loudness": [0,0,0,0],
+      "seek": [761,17,366,10],
+      "correlation": [655,38,539,32],
+      "balance": [655,70,539,32],
+      "bar_column": [761,6,366,98]
+    },
+    {
+      "width": 1200,
+      "height": 84,
+      "settings": "defaults",
+      "art": [6,6,72,72],
+      "info": [84,6,474,72],
+      "goniometer": [564,6,72,72],
+      "stack": [642,6,266,72],
+      "loudness": [914,6,280,72],
+      "seek": [730,14,111,8],
+      "correlation": [642,30,266,24],
+      "balance": [642,54,266,24],
+      "bar_column": [730,6,111,72]
+    },
+    {
+      "width": 1200,
+      "height": 84,
+      "settings": "readouts_and_info_off",
+      "art": [6,6,72,72],
+      "info": [0,0,0,0],
+      "goniometer": [564,6,72,72],
+      "stack": [642,6,552,72],
+      "loudness": [0,0,0,0],
+      "seek": [730,14,397,8],
+      "correlation": [642,30,552,24],
+      "balance": [642,54,552,24],
+      "bar_column": [730,6,397,72]
+    },
+    {
+      "width": 900,
+      "height": 130,
+      "settings": "defaults",
+      "art": [6,6,118,118],
+      "info": [130,6,255,118],
+      "goniometer": [391,6,118,118],
+      "stack": [515,6,261,118],
+      "loudness": [782,6,112,118],
+      "seek": [621,20,88,10],
+      "correlation": [515,45,261,39],
+      "balance": [515,84,261,39],
+      "bar_column": [621,6,88,118]
+    },
+    {
+      "width": 900,
+      "height": 130,
+      "settings": "readouts_and_info_off",
+      "art": [6,6,118,118],
+      "info": [0,0,0,0],
+      "goniometer": [391,6,118,118],
+      "stack": [515,6,379,118],
+      "loudness": [0,0,0,0],
+      "seek": [621,20,206,10],
+      "correlation": [515,45,379,39],
+      "balance": [515,84,379,39],
+      "bar_column": [621,6,206,118]
+    },
+    {
+      "width": 900,
+      "height": 110,
+      "settings": "defaults",
+      "art": [6,6,98,98],
+      "info": [110,6,285,98],
+      "goniometer": [401,6,98,98],
+      "stack": [505,6,271,98],
+      "loudness": [782,6,112,98],
+      "seek": [611,17,98,10],
+      "correlation": [505,38,271,32],
+      "balance": [505,70,271,32],
+      "bar_column": [611,6,98,98]
+    },
+    {
+      "width": 900,
+      "height": 110,
+      "settings": "readouts_and_info_off",
+      "art": [6,6,98,98],
+      "info": [0,0,0,0],
+      "goniometer": [401,6,98,98],
+      "stack": [505,6,389,98],
+      "loudness": [0,0,0,0],
+      "seek": [611,17,216,10],
+      "correlation": [505,38,389,32],
+      "balance": [505,70,389,32],
+      "bar_column": [611,6,216,98]
+    },
+    {
+      "width": 900,
+      "height": 84,
+      "settings": "defaults",
+      "art": [6,6,72,72],
+      "info": [84,6,324,72],
+      "goniometer": [414,6,72,72],
+      "stack": [492,6,228,72],
+      "loudness": [726,6,168,72],
+      "seek": [580,14,73,8],
+      "correlation": [492,30,228,24],
+      "balance": [492,54,228,24],
+      "bar_column": [580,6,73,72]
+    },
+    {
+      "width": 900,
+      "height": 84,
+      "settings": "readouts_and_info_off",
+      "art": [6,6,72,72],
+      "info": [0,0,0,0],
+      "goniometer": [414,6,72,72],
+      "stack": [492,6,402,72],
+      "loudness": [0,0,0,0],
+      "seek": [580,14,247,8],
+      "correlation": [492,30,402,24],
+      "balance": [492,54,402,24],
+      "bar_column": [580,6,247,72]
+    },
+    {
+      "width": 700,
+      "height": 130,
+      "settings": "defaults",
+      "art": [6,6,118,118],
+      "info": [130,6,155,118],
+      "goniometer": [291,6,118,118],
+      "stack": [415,6,217,118],
+      "loudness": [638,6,56,118],
+      "seek": [415,45,217,9],
+      "correlation": [415,64,217,29],
+      "balance": [415,93,217,29],
+      "bar_column": [452,6,143,118]
+    },
+    {
+      "width": 700,
+      "height": 130,
+      "settings": "readouts_and_info_off",
+      "art": [6,6,118,118],
+      "info": [0,0,0,0],
+      "goniometer": [291,6,118,118],
+      "stack": [415,6,279,118],
+      "loudness": [0,0,0,0],
+      "seek": [521,20,106,10],
+      "correlation": [415,45,279,39],
+      "balance": [415,84,279,39],
+      "bar_column": [521,6,106,118]
+    },
+    {
+      "width": 700,
+      "height": 110,
+      "settings": "defaults",
+      "art": [6,6,98,98],
+      "info": [110,6,185,98],
+      "goniometer": [301,6,98,98],
+      "stack": [405,6,227,98],
+      "loudness": [638,6,56,98],
+      "seek": [405,38,227,8],
+      "correlation": [405,54,227,24],
+      "balance": [405,78,227,24],
+      "bar_column": [442,6,153,98]
+    },
+    {
+      "width": 700,
+      "height": 110,
+      "settings": "readouts_and_info_off",
+      "art": [6,6,98,98],
+      "info": [0,0,0,0],
+      "goniometer": [301,6,98,98],
+      "stack": [405,6,289,98],
+      "loudness": [0,0,0,0],
+      "seek": [511,17,116,10],
+      "correlation": [405,38,289,32],
+      "balance": [405,70,289,32],
+      "bar_column": [511,6,116,98]
+    },
+    {
+      "width": 700,
+      "height": 84,
+      "settings": "defaults",
+      "art": [6,6,72,72],
+      "info": [84,6,224,72],
+      "goniometer": [314,6,72,72],
+      "stack": [392,6,240,72],
+      "loudness": [638,6,56,72],
+      "seek": [480,14,85,8],
+      "correlation": [392,30,240,24],
+      "balance": [392,54,240,24],
+      "bar_column": [480,6,85,72]
+    },
+    {
+      "width": 700,
+      "height": 84,
+      "settings": "readouts_and_info_off",
+      "art": [6,6,72,72],
+      "info": [0,0,0,0],
+      "goniometer": [314,6,72,72],
+      "stack": [392,6,302,72],
+      "loudness": [0,0,0,0],
+      "seek": [480,14,147,8],
+      "correlation": [392,30,302,24],
+      "balance": [392,54,302,24],
+      "bar_column": [480,6,147,72]
+    },
+    {
+      "width": 420,
+      "height": 130,
+      "settings": "defaults",
+      "art": [0,0,0,0],
+      "info": [6,6,156,118],
+      "goniometer": [168,23,84,84],
+      "stack": [258,6,156,118],
+      "loudness": [0,0,0,0],
+      "seek": [258,45,156,9],
+      "correlation": [258,64,156,29],
+      "balance": [258,93,156,29],
+      "bar_column": [295,6,82,118]
+    },
+    {
+      "width": 420,
+      "height": 130,
+      "settings": "readouts_and_info_off",
+      "art": [6,6,78,118],
+      "info": [0,0,0,0],
+      "goniometer": [168,23,84,84],
+      "stack": [258,6,156,118],
+      "loudness": [0,0,0,0],
+      "seek": [258,45,156,9],
+      "correlation": [258,64,156,29],
+      "balance": [258,93,156,29],
+      "bar_column": [295,6,82,118]
+    },
+    {
+      "width": 420,
+      "height": 110,
+      "settings": "defaults",
+      "art": [0,0,0,0],
+      "info": [6,6,156,98],
+      "goniometer": [168,13,84,84],
+      "stack": [258,6,156,98],
+      "loudness": [0,0,0,0],
+      "seek": [258,38,156,8],
+      "correlation": [258,54,156,24],
+      "balance": [258,78,156,24],
+      "bar_column": [295,6,82,98]
+    },
+    {
+      "width": 420,
+      "height": 110,
+      "settings": "readouts_and_info_off",
+      "art": [6,6,78,98],
+      "info": [0,0,0,0],
+      "goniometer": [168,13,84,84],
+      "stack": [258,6,156,98],
+      "loudness": [0,0,0,0],
+      "seek": [258,38,156,8],
+      "correlation": [258,54,156,24],
+      "balance": [258,78,156,24],
+      "bar_column": [295,6,82,98]
+    },
+    {
+      "width": 420,
+      "height": 84,
+      "settings": "defaults",
+      "art": [0,0,0,0],
+      "info": [6,6,162,72],
+      "goniometer": [174,6,72,72],
+      "stack": [252,6,162,72],
+      "loudness": [0,0,0,0],
+      "seek": [252,30,162,6],
+      "correlation": [252,42,162,18],
+      "balance": [252,60,162,18],
+      "bar_column": [289,6,88,72]
+    },
+    {
+      "width": 420,
+      "height": 84,
+      "settings": "readouts_and_info_off",
+      "art": [6,6,72,72],
+      "info": [0,0,0,0],
+      "goniometer": [174,6,72,72],
+      "stack": [252,6,162,72],
+      "loudness": [0,0,0,0],
+      "seek": [252,30,162,6],
+      "correlation": [252,42,162,18],
+      "balance": [252,60,162,18],
+      "bar_column": [289,6,88,72]
+    },
+    {
+      "width": 240,
+      "height": 130,
+      "settings": "defaults",
+      "art": [0,0,0,0],
+      "info": [0,0,0,0],
+      "goniometer": [96,41,48,48],
+      "stack": [150,6,84,118],
+      "loudness": [0,0,0,0],
+      "seek": [150,45,84,9],
+      "correlation": [150,64,84,29],
+      "balance": [150,93,84,29],
+      "bar_column": [0,0,0,0]
+    },
+    {
+      "width": 240,
+      "height": 130,
+      "settings": "readouts_and_info_off",
+      "art": [6,6,42,118],
+      "info": [0,0,0,0],
+      "goniometer": [96,41,48,48],
+      "stack": [150,6,84,118],
+      "loudness": [0,0,0,0],
+      "seek": [150,45,84,9],
+      "correlation": [150,64,84,29],
+      "balance": [150,93,84,29],
+      "bar_column": [0,0,0,0]
+    },
+    {
+      "width": 240,
+      "height": 110,
+      "settings": "defaults",
+      "art": [0,0,0,0],
+      "info": [0,0,0,0],
+      "goniometer": [96,31,48,48],
+      "stack": [150,6,84,98],
+      "loudness": [0,0,0,0],
+      "seek": [150,38,84,8],
+      "correlation": [150,54,84,24],
+      "balance": [150,78,84,24],
+      "bar_column": [0,0,0,0]
+    },
+    {
+      "width": 240,
+      "height": 110,
+      "settings": "readouts_and_info_off",
+      "art": [6,6,42,98],
+      "info": [0,0,0,0],
+      "goniometer": [96,31,48,48],
+      "stack": [150,6,84,98],
+      "loudness": [0,0,0,0],
+      "seek": [150,38,84,8],
+      "correlation": [150,54,84,24],
+      "balance": [150,78,84,24],
+      "bar_column": [0,0,0,0]
+    },
+    {
+      "width": 240,
+      "height": 84,
+      "settings": "defaults",
+      "art": [0,0,0,0],
+      "info": [0,0,0,0],
+      "goniometer": [96,18,48,48],
+      "stack": [150,6,84,72],
+      "loudness": [0,0,0,0],
+      "seek": [150,30,84,6],
+      "correlation": [150,42,84,18],
+      "balance": [150,60,84,18],
+      "bar_column": [0,0,0,0]
+    },
+    {
+      "width": 240,
+      "height": 84,
+      "settings": "readouts_and_info_off",
+      "art": [6,6,42,72],
+      "info": [0,0,0,0],
+      "goniometer": [96,18,48,48],
+      "stack": [150,6,84,72],
+      "loudness": [0,0,0,0],
+      "seek": [150,30,84,6],
+      "correlation": [150,42,84,18],
+      "balance": [150,60,84,18],
+      "bar_column": [0,0,0,0]
+    },
+    {
+      "width": 20,
+      "height": 130,
+      "settings": "defaults",
+      "art": [0,0,0,0],
+      "info": [0,0,0,0],
+      "goniometer": [0,0,0,0],
+      "stack": [0,0,0,0],
+      "loudness": [0,0,0,0],
+      "seek": [0,0,0,0],
+      "correlation": [0,0,0,0],
+      "balance": [0,0,0,0],
+      "bar_column": [0,0,0,0]
+    },
+    {
+      "width": 20,
+      "height": 130,
+      "settings": "readouts_and_info_off",
+      "art": [0,0,0,0],
+      "info": [0,0,0,0],
+      "goniometer": [0,0,0,0],
+      "stack": [0,0,0,0],
+      "loudness": [0,0,0,0],
+      "seek": [0,0,0,0],
+      "correlation": [0,0,0,0],
+      "balance": [0,0,0,0],
+      "bar_column": [0,0,0,0]
+    },
+    {
+      "width": 20,
+      "height": 110,
+      "settings": "defaults",
+      "art": [0,0,0,0],
+      "info": [0,0,0,0],
+      "goniometer": [0,0,0,0],
+      "stack": [0,0,0,0],
+      "loudness": [0,0,0,0],
+      "seek": [0,0,0,0],
+      "correlation": [0,0,0,0],
+      "balance": [0,0,0,0],
+      "bar_column": [0,0,0,0]
+    },
+    {
+      "width": 20,
+      "height": 110,
+      "settings": "readouts_and_info_off",
+      "art": [0,0,0,0],
+      "info": [0,0,0,0],
+      "goniometer": [0,0,0,0],
+      "stack": [0,0,0,0],
+      "loudness": [0,0,0,0],
+      "seek": [0,0,0,0],
+      "correlation": [0,0,0,0],
+      "balance": [0,0,0,0],
+      "bar_column": [0,0,0,0]
+    },
+    {
+      "width": 20,
+      "height": 84,
+      "settings": "defaults",
+      "art": [0,0,0,0],
+      "info": [0,0,0,0],
+      "goniometer": [0,0,0,0],
+      "stack": [0,0,0,0],
+      "loudness": [0,0,0,0],
+      "seek": [0,0,0,0],
+      "correlation": [0,0,0,0],
+      "balance": [0,0,0,0],
+      "bar_column": [0,0,0,0]
+    },
+    {
+      "width": 20,
+      "height": 84,
+      "settings": "readouts_and_info_off",
+      "art": [0,0,0,0],
+      "info": [0,0,0,0],
+      "goniometer": [0,0,0,0],
+      "stack": [0,0,0,0],
+      "loudness": [0,0,0,0],
+      "seek": [0,0,0,0],
+      "correlation": [0,0,0,0],
+      "balance": [0,0,0,0],
+      "bar_column": [0,0,0,0]
+    }
+  ],
+  "stereo_scope_1200x600": [
+    {
+      "pair_mode": "LeftRight",
+      "mirror_left_pane": false,
+      "outer_left": [0,0,30,600],
+      "outer_right": [1170,0,30,600],
+      "gutter": [583,0,34,600],
+      "panes": [
+        {
+          "label": "L",
+          "bounds": [30,0,553,600],
+          "curve": [30,20,99,580],
+          "spectro": [129,20,454,580],
+          "lane": [30,0,553,20],
+          "curve_on_left": true
+        },
+        {
+          "label": "R",
+          "bounds": [617,0,553,600],
+          "curve": [617,20,99,580],
+          "spectro": [716,20,454,580],
+          "lane": [617,0,553,20],
+          "curve_on_left": true
+        }
+      ],
+      "map": {
+        "scale": "Note",
+        "width": 580,
+        "fmin": 20,
+        "fmax": 20000
+      }
+    },
+    {
+      "pair_mode": "LeftRight",
+      "mirror_left_pane": true,
+      "outer_left": [0,0,30,600],
+      "outer_right": [1170,0,30,600],
+      "gutter": [583,0,34,600],
+      "panes": [
+        {
+          "label": "L",
+          "bounds": [30,0,553,600],
+          "curve": [484,20,99,580],
+          "spectro": [30,20,454,580],
+          "lane": [30,0,553,20],
+          "curve_on_left": false
+        },
+        {
+          "label": "R",
+          "bounds": [617,0,553,600],
+          "curve": [617,20,99,580],
+          "spectro": [716,20,454,580],
+          "lane": [617,0,553,20],
+          "curve_on_left": true
+        }
+      ],
+      "map": {
+        "scale": "Note",
+        "width": 580,
+        "fmin": 20,
+        "fmax": 20000
+      }
+    },
+    {
+      "pair_mode": "MidSide",
+      "mirror_left_pane": false,
+      "outer_left": [0,0,30,600],
+      "outer_right": [1170,0,30,600],
+      "gutter": [583,0,34,600],
+      "panes": [
+        {
+          "label": "MID",
+          "bounds": [30,0,553,600],
+          "curve": [30,20,99,580],
+          "spectro": [129,20,454,580],
+          "lane": [30,0,553,20],
+          "curve_on_left": true
+        },
+        {
+          "label": "SIDE",
+          "bounds": [617,0,553,600],
+          "curve": [617,20,99,580],
+          "spectro": [716,20,454,580],
+          "lane": [617,0,553,20],
+          "curve_on_left": true
+        }
+      ],
+      "map": {
+        "scale": "Note",
+        "width": 580,
+        "fmin": 20,
+        "fmax": 20000
+      }
+    },
+    {
+      "pair_mode": "MidSide",
+      "mirror_left_pane": true,
+      "outer_left": [0,0,30,600],
+      "outer_right": [1170,0,30,600],
+      "gutter": [583,0,34,600],
+      "panes": [
+        {
+          "label": "MID",
+          "bounds": [30,0,553,600],
+          "curve": [484,20,99,580],
+          "spectro": [30,20,454,580],
+          "lane": [30,0,553,20],
+          "curve_on_left": false
+        },
+        {
+          "label": "SIDE",
+          "bounds": [617,0,553,600],
+          "curve": [617,20,99,580],
+          "spectro": [716,20,454,580],
+          "lane": [617,0,553,20],
+          "curve_on_left": true
+        }
+      ],
+      "map": {
+        "scale": "Note",
+        "width": 580,
+        "fmin": 20,
+        "fmax": 20000
+      }
+    },
+    {
+      "pair_mode": "LeftOnly",
+      "mirror_left_pane": false,
+      "outer_left": [0,0,30,600],
+      "outer_right": [1170,0,30,600],
+      "gutter": [0,0,0,0],
+      "panes": [
+        {
+          "label": "LEFT",
+          "bounds": [30,0,1140,600],
+          "curve": [30,20,205,580],
+          "spectro": [235,20,935,580],
+          "lane": [30,0,1140,20],
+          "curve_on_left": true
+        }
+      ],
+      "map": {
+        "scale": "Note",
+        "width": 580,
+        "fmin": 20,
+        "fmax": 20000
+      }
+    },
+    {
+      "pair_mode": "LeftOnly",
+      "mirror_left_pane": true,
+      "outer_left": [0,0,30,600],
+      "outer_right": [1170,0,30,600],
+      "gutter": [0,0,0,0],
+      "panes": [
+        {
+          "label": "LEFT",
+          "bounds": [30,0,1140,600],
+          "curve": [30,20,205,580],
+          "spectro": [235,20,935,580],
+          "lane": [30,0,1140,20],
+          "curve_on_left": true
+        }
+      ],
+      "map": {
+        "scale": "Note",
+        "width": 580,
+        "fmin": 20,
+        "fmax": 20000
+      }
+    },
+    {
+      "pair_mode": "RightOnly",
+      "mirror_left_pane": false,
+      "outer_left": [0,0,30,600],
+      "outer_right": [1170,0,30,600],
+      "gutter": [0,0,0,0],
+      "panes": [
+        {
+          "label": "RIGHT",
+          "bounds": [30,0,1140,600],
+          "curve": [30,20,205,580],
+          "spectro": [235,20,935,580],
+          "lane": [30,0,1140,20],
+          "curve_on_left": true
+        }
+      ],
+      "map": {
+        "scale": "Note",
+        "width": 580,
+        "fmin": 20,
+        "fmax": 20000
+      }
+    },
+    {
+      "pair_mode": "RightOnly",
+      "mirror_left_pane": true,
+      "outer_left": [0,0,30,600],
+      "outer_right": [1170,0,30,600],
+      "gutter": [0,0,0,0],
+      "panes": [
+        {
+          "label": "RIGHT",
+          "bounds": [30,0,1140,600],
+          "curve": [30,20,205,580],
+          "spectro": [235,20,935,580],
+          "lane": [30,0,1140,20],
+          "curve_on_left": true
+        }
+      ],
+      "map": {
+        "scale": "Note",
+        "width": 580,
+        "fmin": 20,
+        "fmax": 20000
+      }
+    }
+  ]
+}

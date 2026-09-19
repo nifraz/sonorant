@@ -1,0 +1,17 @@
+# Nostalgia+ settings (older build)
+Preset=QC
+FsShowWaveform=False
+FsImmersive=True
+FsGlow=False
+FsAutoHide=False
+FsShowOsd=False
+DeckShowMeters=False
+FMax=not-a-number
+fmin=35.5
+this line has no equals sign
+=orphan value
+Palette=viridis
+ColPeakTrace=#FF102030
+ColHover=auto
+ColCurve=zz
+TargetFps=144.7

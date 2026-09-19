@@ -1,0 +1,59 @@
+{
+  "generator": "NostalgiaPlus build/TestHarness.exe --export",
+  "nostalgiaplus_commit": "e3f599ddb5db1b8e138b70c4867305ef18090539",
+  "format": 1,
+  "sections": [
+    {
+      "name": "fft",
+      "file": "fft.json"
+    },
+    {
+      "name": "frequency_map",
+      "file": "frequency_map.json"
+    },
+    {
+      "name": "notes",
+      "file": "notes.json"
+    },
+    {
+      "name": "spectrum",
+      "file": "spectrum.json"
+    },
+    {
+      "name": "dynamic_range",
+      "file": "dynamic_range.json"
+    },
+    {
+      "name": "curve_shaping",
+      "file": "curve_shaping.json"
+    },
+    {
+      "name": "loudness",
+      "file": "loudness.json"
+    },
+    {
+      "name": "music_features",
+      "file": "music_features.json"
+    },
+    {
+      "name": "pipeline",
+      "file": "pipeline.json"
+    },
+    {
+      "name": "palettes",
+      "file": "palettes.json"
+    },
+    {
+      "name": "settings",
+      "file": "settings.json"
+    },
+    {
+      "name": "timeline",
+      "file": "timeline.json"
+    },
+    {
+      "name": "layout",
+      "file": "layout.json"
+    }
+  ]
+}

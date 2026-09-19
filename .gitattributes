@@ -1,0 +1,12 @@
+# Keep text LF everywhere; rustfmt and the Linux runners expect it.
+* text=auto eol=lf
+
+# Reference data and images are bytes, never text.
+*.f64 binary
+*.png binary
+*.wav binary
+*.ttf binary
+*.otf binary
+
+# Nostalgia+'s settings files, kept byte for byte as it wrote them (CRLF).
+tests/reference/settings/** -text

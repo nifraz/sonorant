@@ -1,0 +1,14 @@
+# Nostalgia+ theme
+ColBackground=#FF0C1824
+ColPanel=auto
+ColGridMajor=auto
+ColGridMinor=auto
+ColAxisText=auto
+ColUnits=auto
+ColCurve=auto
+ColPeakTrace=#FFFAC828
+ColAverageTrace=auto
+ColMinimumTrace=auto
+ColHover=auto
+ColWaveform=auto
+ColSnapshot=auto

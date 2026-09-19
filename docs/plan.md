@@ -574,4 +574,5 @@ Diptych, Mirrorscope, Twinscope, Sonoglow, Glowtrace, Mirrorlume, Twinhue.
 - [ITU-R BS.1770](https://www.itu.int/rec/R-REC-BS.1770): loudness and true peak
 - [Rogers Imaging Corporation trademarks](https://trademarks.justia.com/owners/rogers-imaging-corporation-5469822):
   the "Earlight" filing
+- [EarSight](https://maxloh.com/earsight/): the assistive audio app of that name
 - [Afterglow on the Microsoft Store](https://apps.microsoft.com/detail/9mvk44x6r37d)
