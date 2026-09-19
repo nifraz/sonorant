@@ -16,6 +16,7 @@ pub mod features;
 pub mod fft;
 pub mod frequency_map;
 pub mod loudness;
+pub mod math;
 pub mod window;
 
 pub use analyzer::{

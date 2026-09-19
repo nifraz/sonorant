@@ -377,6 +377,7 @@ impl Engine {
         let c = &self.config;
         self.analyzer
             .configure(self.sample_rate, c.quality, c.window);
+        self.analyzer.set_hop_frames(self.hop_frames);
 
         let (left, right) = (
             &self.hist_l[self.start..self.end],

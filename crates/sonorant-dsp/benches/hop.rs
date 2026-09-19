@@ -5,6 +5,7 @@ use std::f64::consts::PI;
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use sonorant_dsp::fft::Fft;
 use sonorant_dsp::*;
 
 fn signal(n: usize) -> (Vec<f32>, Vec<f32>) {
@@ -49,8 +50,57 @@ fn hop(c: &mut Criterion) {
         );
     }
 
-    // The whole hop: the Balanced transform, the display columns and the history grid,
+    // The parts of a Balanced hop on their own: the transforms, then each projection.
+    let mut ffts: Vec<(Fft, Vec<f64>, f64)> = [16384, 4096, 1024]
+        .into_iter()
+        .map(|n| {
+            let (w, g) = window::build(WindowType::Hann, n);
+            (Fft::new(n), w, g)
+        })
+        .collect();
+    let (fl, fr): (Vec<f64>, Vec<f64>) = (
+        l[..16384].iter().map(|&v| v as f64).collect(),
+        r[..16384].iter().map(|&v| v as f64).collect(),
+    );
+    let (mut ml, mut mr) = (vec![0.0; 8193], vec![0.0; 8193]);
+    c.bench_function("Balanced transforms only", |bench| {
+        bench.iter(|| {
+            for (fft, w, g) in &mut ffts {
+                let n = fft.size();
+                fft.power_real_pair(&fl[..n], &fr[..n], w, *g, &mut ml, &mut mr);
+            }
+            black_box(ml[100])
+        })
+    });
+    let mut an = SpectrumAnalyzer::new();
+    an.configure(48000.0, AnalysisQuality::Balanced, WindowType::Hann);
+    an.compute_stereo(
+        &l,
+        &r,
+        &map,
+        &mut a,
+        &mut b,
+        BandAggregate::Peak,
+        3.0,
+        ChannelPairMode::LeftRight,
+    );
+    c.bench_function("Balanced projection only, 1080 columns", |bench| {
+        bench.iter(|| {
+            an.reproject(&map, &mut a, Some(&mut b), BandAggregate::Peak, 3.0);
+            black_box(a[100])
+        })
+    });
+    c.bench_function("Balanced projection only, 2048-row history grid", |bench| {
+        bench.iter(|| {
+            an.reproject(&grid, &mut ga, Some(&mut gb), BandAggregate::Peak, 3.0);
+            black_box(ga[100])
+        })
+    });
+
+    // The worst hop: every Balanced transform, the display columns and a history row,
     // ballistics on both panes, features, range and 400 samples of loudness metering.
+    // At 120 hops a second the 16K transform and the row come every other hop; the
+    // engine benchmark in sonorant-core measures the average.
     let mut an = SpectrumAnalyzer::new();
     an.configure(48000.0, AnalysisQuality::Balanced, WindowType::Hann);
     let mut panes = [ChannelCurves::new(map.width), ChannelCurves::new(map.width)];
@@ -60,7 +110,7 @@ fn hop(c: &mut Criterion) {
     meter.configure(48000.0);
     let ml: Vec<f64> = l[..400].iter().map(|&v| v as f64).collect();
     let mr: Vec<f64> = r[..400].iter().map(|&v| v as f64).collect();
-    c.bench_function("whole hop, Balanced, 120 hops per second", |bench| {
+    c.bench_function("worst hop, Balanced, 120 hops per second", |bench| {
         bench.iter(|| {
             let [pa, pb] = &mut panes;
             an.compute_stereo(

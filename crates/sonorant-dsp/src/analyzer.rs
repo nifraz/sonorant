@@ -7,8 +7,9 @@
 //! 2.9 Hz below 300 Hz, one semitone at 50 Hz, while keeping 47 Hz bins above 3 kHz
 //! where transients live.
 
-use crate::fft::Fft;
-use crate::frequency_map::{FrequencyMap, log2_ratio};
+use crate::fft::{Complex, Fft};
+use crate::frequency_map::{FreqScale, FrequencyMap, log2_ratio};
+use crate::math;
 use crate::window::{self, WindowType};
 
 /// The level reported for bins with no measurable energy, in dBFS.
@@ -188,6 +189,15 @@ impl ChannelPairMode {
     }
 }
 
+/// Windows at least this long (8K and up at 48 kHz) are "long": see
+/// [`SpectrumAnalyzer::set_hop_frames`].
+const LONG_BAND_SECONDS: f64 = 0.15;
+/// How often a long band refreshes, at most, in calls per second of audio.
+const LONG_BAND_RATE: f64 = 60.0;
+/// Projection plans kept at once: the display's, the history grid's, and one spare so a
+/// resize doesn't evict the grid's.
+const PLAN_SLOTS: usize = 3;
+
 #[derive(Debug)]
 struct SubBand {
     fft: Fft,
@@ -195,24 +205,90 @@ struct SubBand {
     hi_hz: f64,
     window: Vec<f64>,
     window_gain: f64,
-    mag_l: Vec<f64>,
-    mag_r: Vec<f64>,
-    frame_l: Vec<f64>,
-    frame_r: Vec<f64>,
+    /// Unscaled power per bin, 0..=n/2: a bin's magnitude is `pow.sqrt() * scale`.
+    pow_l: Vec<f64>,
+    pow_r: Vec<f64>,
+    scale: f64,
     bin_width: f64,
+    /// The band transforms on calls where `calls % stride == phase`.
+    stride: u64,
+    phase: u64,
+    due: bool,
+}
+
+/// What a compute call transformed. A change refreshes every band at once, so no band
+/// shows the old signal after a switch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Input {
+    Single(ChannelMode),
+    Pair(ChannelPairMode),
+}
+
+/// Where a column reads one band's spectrum.
+#[derive(Clone, Copy, Debug)]
+enum Read {
+    /// Bins `k0..=k1`, combined by the aggregate.
+    Bins { band: u32, k0: u32, k1: u32 },
+    /// A column narrower than one bin: interpolated at its centre, so the low end reads
+    /// as a smooth ridge rather than a staircase.
+    Lerp {
+        band: u32,
+        i0: u32,
+        i1: u32,
+        frac: f64,
+    },
+}
+
+/// One column of a projection: the band that owns its centre, blended with a neighbour
+/// inside a crossover, as `v * (1 - t) + other * t`, upper neighbour first.
+#[derive(Clone, Copy, Debug)]
+struct Column {
+    primary: Read,
+    upper: Option<(Read, f64)>,
+    lower: Option<(Read, f64)>,
+}
+
+/// What a projection was built for. Maps with the same axis, size and range have the
+/// same edges, so these identify one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PlanKey {
+    scale: FreqScale,
+    width: usize,
+    fmin: f64,
+    fmax: f64,
+    tilt: f64,
+    bands: u64,
+}
+
+/// A map's columns resolved against the bands: which bins each reads, the blend
+/// weights and the tilt. Built when the axis, size, tilt or profile changes, so a hop
+/// does no edge arithmetic and takes one logarithm per column and channel.
+#[derive(Clone, Debug, Default)]
+struct Projection {
+    key: Option<PlanKey>,
+    columns: Vec<Column>,
+    /// Each column's tilt in dB, apart so the conversion to dB is one tight loop.
+    tilt: Vec<f64>,
+    last_used: u64,
 }
 
 /// Several FFT sizes over the same instant, stitched into one spectrum per display
-/// column. Configuring allocates; computing does not.
+/// column. Configuring allocates; computing does not, except to plan a map it hasn't
+/// seen.
 #[derive(Debug)]
 pub struct SpectrumAnalyzer {
     bands: Vec<SubBand>,
-    snap_l: Vec<f64>,
-    snap_r: Vec<f64>,
     max_n: usize,
     sample_rate: f64,
     window: WindowType,
     quality: AnalysisQuality,
+    hop_frames: f64,
+    calls: u64,
+    last_input: Option<Input>,
+    /// Bumped whenever the bands are rebuilt, which makes every plan stale.
+    generation: u64,
+    plans: [Projection; PLAN_SLOTS],
+    plan_clock: u64,
 }
 
 impl Default for SpectrumAnalyzer {
@@ -226,12 +302,16 @@ impl SpectrumAnalyzer {
     pub fn new() -> SpectrumAnalyzer {
         SpectrumAnalyzer {
             bands: Vec::new(),
-            snap_l: Vec::new(),
-            snap_r: Vec::new(),
             max_n: 0,
             sample_rate: 48000.0,
             window: WindowType::Hann,
             quality: AnalysisQuality::Balanced,
+            hop_frames: 0.0,
+            calls: 0,
+            last_input: None,
+            generation: 0,
+            plans: Default::default(),
+            plan_clock: 0,
         }
     }
 
@@ -302,17 +382,64 @@ impl SpectrumAnalyzer {
                     },
                     window,
                     window_gain,
-                    mag_l: vec![0.0; n / 2 + 1],
-                    mag_r: vec![0.0; n / 2 + 1],
-                    frame_l: vec![0.0; n],
-                    frame_r: vec![0.0; n],
+                    pow_l: vec![0.0; n / 2 + 1],
+                    pow_r: vec![0.0; n / 2 + 1],
+                    scale: 0.0,
                     bin_width: sample_rate / n as f64,
+                    stride: 1,
+                    phase: 0,
+                    due: true,
                 }
             })
             .collect();
         self.max_n = sizes.iter().copied().max().unwrap_or(0);
-        self.snap_l = vec![0.0; self.max_n];
-        self.snap_r = vec![0.0; self.max_n];
+        self.last_input = None;
+        self.generation += 1;
+        self.assign_strides();
+    }
+
+    /// Tells the analyser how many frames pass between compute calls, so the long
+    /// transforms can skip calls. At 120 hops a second a window of 150 ms or more moves
+    /// by about 5% of its length or less per hop (the 16K window by 2.4%), so
+    /// transforming it every hop shows nothing new but costs most of the hop. Such bands
+    /// refresh at most 60 times a second of audio instead, taking turns when there are
+    /// two. At 60 hops a second or slower, and by default, every band refreshes on every
+    /// call.
+    pub fn set_hop_frames(&mut self, frames: f64) {
+        if self.hop_frames != frames {
+            self.hop_frames = frames;
+            self.assign_strides();
+        }
+    }
+
+    fn assign_strides(&mut self) {
+        let stride = if self.hop_frames > 0.0 {
+            ((self.sample_rate / LONG_BAND_RATE / self.hop_frames + 1e-9).floor() as u64).max(1)
+        } else {
+            1
+        };
+        let mut turn = 0;
+        for band in &mut self.bands {
+            if band.n as f64 >= LONG_BAND_SECONDS * self.sample_rate {
+                band.stride = stride;
+                band.phase = turn % stride;
+                turn += 1;
+            } else {
+                band.stride = 1;
+                band.phase = 0;
+            }
+        }
+    }
+
+    /// Starts a compute call: marks the bands that transform this time.
+    fn begin(&mut self, input: Input) {
+        let all = self.last_input != Some(input);
+        self.last_input = Some(input);
+        let call = self.calls;
+        self.calls += 1;
+        for band in &mut self.bands {
+            band.due = all || call % band.stride == band.phase;
+        }
     }
 
     /// Single-channel analysis of the newest [`largest_fft`](Self::largest_fft) frames.
@@ -334,26 +461,22 @@ impl SpectrumAnalyzer {
         if self.bands.is_empty() || left.len() < n || right.len() < n {
             return false;
         }
-        let (l, r) = (&left[left.len() - n..], &right[right.len() - n..]);
-        for ((d, &a), &b) in self.snap_l.iter_mut().zip(l).zip(r) {
+        self.begin(Input::Single(channel));
+        for band in self.bands.iter_mut().filter(|b| b.due) {
+            let (l, r) = (&left[left.len() - band.n..], &right[right.len() - band.n..]);
+            let input = band.fft.input_mut();
+            let w = &band.window;
             // Sums and differences are formed in f32, as the capture ring held them.
-            *d = match channel {
-                ChannelMode::Left => a as f64,
-                ChannelMode::Right => b as f64,
-                ChannelMode::Side => (a - b) as f64 * 0.5,
-                ChannelMode::Mid => (a + b) as f64 * 0.5,
-            };
+            match channel {
+                ChannelMode::Left => fill(input, w, l, r, |a, _| (a as f64, 0.0)),
+                ChannelMode::Right => fill(input, w, l, r, |_, b| (b as f64, 0.0)),
+                ChannelMode::Side => fill(input, w, l, r, |a, b| ((a - b) as f64 * 0.5, 0.0)),
+                ChannelMode::Mid => fill(input, w, l, r, |a, b| ((a + b) as f64 * 0.5, 0.0)),
+            }
+            band.scale = band.fft.transform_power(band.window_gain, &mut band.pow_l);
         }
-        for band in &mut self.bands {
-            band.frame_l.copy_from_slice(&self.snap_l[n - band.n..]);
-            band.fft.magnitude_real(
-                &band.frame_l,
-                &band.window,
-                band.window_gain,
-                &mut band.mag_l,
-            );
-        }
-        self.project(map, out, None, aggregate, tilt_db_per_octave);
+        let plan = self.plan(map, tilt_db_per_octave);
+        self.project(plan, out, None, aggregate);
         true
     }
 
@@ -376,29 +499,26 @@ impl SpectrumAnalyzer {
         if self.bands.is_empty() || left.len() < n || right.len() < n {
             return false;
         }
-        let (l, r) = (&left[left.len() - n..], &right[right.len() - n..]);
-        for (i, (&a, &b)) in l.iter().zip(r).enumerate() {
-            let (a, b) = (a as f64, b as f64);
-            (self.snap_l[i], self.snap_r[i]) = match mode {
-                ChannelPairMode::MidSide => ((a + b) * 0.5, (a - b) * 0.5),
-                ChannelPairMode::LeftOnly => (a, a),
-                ChannelPairMode::RightOnly => (b, b),
-                ChannelPairMode::LeftRight => (a, b),
-            };
+        self.begin(Input::Pair(mode));
+        for band in self.bands.iter_mut().filter(|b| b.due) {
+            let (l, r) = (&left[left.len() - band.n..], &right[right.len() - band.n..]);
+            let input = band.fft.input_mut();
+            let w = &band.window;
+            let f = |a: f32| a as f64;
+            match mode {
+                ChannelPairMode::MidSide => fill(input, w, l, r, |a, b| {
+                    ((f(a) + f(b)) * 0.5, (f(a) - f(b)) * 0.5)
+                }),
+                ChannelPairMode::LeftOnly => fill(input, w, l, r, |a, _| (f(a), f(a))),
+                ChannelPairMode::RightOnly => fill(input, w, l, r, |_, b| (f(b), f(b))),
+                ChannelPairMode::LeftRight => fill(input, w, l, r, |a, b| (f(a), f(b))),
+            }
+            band.scale =
+                band.fft
+                    .transform_power_pair(band.window_gain, &mut band.pow_l, &mut band.pow_r);
         }
-        for band in &mut self.bands {
-            band.frame_l.copy_from_slice(&self.snap_l[n - band.n..]);
-            band.frame_r.copy_from_slice(&self.snap_r[n - band.n..]);
-            band.fft.magnitude_real_pair(
-                &band.frame_l,
-                &band.frame_r,
-                &band.window,
-                band.window_gain,
-                &mut band.mag_l,
-                &mut band.mag_r,
-            );
-        }
-        self.project(map, out_a, Some(out_b), aggregate, tilt_db_per_octave);
+        let plan = self.plan(map, tilt_db_per_octave);
+        self.project(plan, out_a, Some(out_b), aggregate);
         true
     }
 
@@ -406,7 +526,7 @@ impl SpectrumAnalyzer {
     /// as the history store's fixed grid, without transforming again. `out_b` is only
     /// meaningful after [`compute_stereo`](Self::compute_stereo).
     pub fn reproject(
-        &self,
+        &mut self,
         map: &FrequencyMap,
         out_a: &mut [f64],
         out_b: Option<&mut [f64]>,
@@ -414,109 +534,222 @@ impl SpectrumAnalyzer {
         tilt_db_per_octave: f64,
     ) {
         if !self.bands.is_empty() {
-            self.project(map, out_a, out_b, aggregate, tilt_db_per_octave);
+            let plan = self.plan(map, tilt_db_per_octave);
+            self.project(plan, out_a, out_b, aggregate);
+        }
+    }
+
+    /// The slot holding the plan for `map` at this tilt, building it if need be in the
+    /// least recently used slot.
+    fn plan(&mut self, map: &FrequencyMap, tilt_db_per_octave: f64) -> usize {
+        let key = PlanKey {
+            scale: map.scale,
+            width: map.width,
+            fmin: map.fmin,
+            fmax: map.fmax,
+            tilt: tilt_db_per_octave,
+            bands: self.generation,
+        };
+        self.plan_clock += 1;
+        let slot = match self.plans.iter().position(|p| p.key == Some(key)) {
+            Some(slot) => slot,
+            None => {
+                let slot = (0..PLAN_SLOTS)
+                    .min_by_key(|&i| self.plans[i].last_used)
+                    .unwrap_or(0);
+                let mut plan = std::mem::take(&mut self.plans[slot]);
+                plan.key = Some(key);
+                plan.columns.clear();
+                plan.columns
+                    .extend((0..map.width).map(|x| self.plan_column(map, x)));
+                plan.tilt.clear();
+                plan.tilt.extend(map.centres.iter().map(|&fc| {
+                    if tilt_db_per_octave != 0.0 && fc > 0.0 {
+                        tilt_db_per_octave * log2_ratio(fc / 1000.0)
+                    } else {
+                        0.0
+                    }
+                }));
+                self.plans[slot] = plan;
+                slot
+            }
+        };
+        self.plans[slot].last_used = self.plan_clock;
+        slot
+    }
+
+    fn plan_column(&self, map: &FrequencyMap, x: usize) -> Column {
+        let (f0, f1, fc) = (map.edges[x], map.edges[x + 1], map.centres[x]);
+        // The band that owns the centre, blended with a neighbour inside a crossover.
+        let last = self.bands.len() - 1;
+        let idx = self.bands.iter().position(|b| fc < b.hi_hz).unwrap_or(last);
+        let read = |i: usize| plan_read(&self.bands[i], i as u32, f0, f1, fc);
+        let mut upper = None;
+        if idx < last {
+            let lo = self.bands[idx].hi_hz / BLEND_RATIO;
+            if fc > lo {
+                let t = (log2_ratio(fc / lo) / log2_ratio(BLEND_RATIO)).min(1.0);
+                upper = Some((read(idx + 1), t));
+            }
+        }
+        let mut lower = None;
+        if idx > 0 {
+            let hi = self.bands[idx - 1].hi_hz * BLEND_RATIO;
+            if fc < hi {
+                let t = (log2_ratio(hi / fc) / log2_ratio(BLEND_RATIO)).min(1.0);
+                lower = Some((read(idx - 1), t));
+            }
+        }
+        Column {
+            primary: read(idx),
+            upper,
+            lower,
         }
     }
 
     fn project(
         &self,
-        map: &FrequencyMap,
+        plan: usize,
         out_a: &mut [f64],
-        mut out_b: Option<&mut [f64]>,
+        out_b: Option<&mut [f64]>,
         aggregate: BandAggregate,
-        tilt_db_per_octave: f64,
     ) {
-        let mut w = map.width.min(out_a.len());
-        if let Some(b) = &out_b {
-            w = w.min(b.len());
-        }
-        for x in 0..w {
-            let (f0, f1, fc) = (map.edges[x], map.edges[x + 1], map.centres[x]);
-            let tilt = if tilt_db_per_octave != 0.0 && fc > 0.0 {
-                tilt_db_per_octave * log2_ratio(fc / 1000.0)
-            } else {
-                0.0
-            };
-            out_a[x] = to_db(self.blended_magnitude(f0, f1, fc, aggregate, false), tilt);
-            if let Some(b) = out_b.as_deref_mut() {
-                b[x] = to_db(self.blended_magnitude(f0, f1, fc, aggregate, true), tilt);
+        let plan = &self.plans[plan];
+        let w = plan.columns.len().min(out_a.len());
+        match out_b {
+            Some(out_b) => {
+                let w = w.min(out_b.len());
+                let (out_a, out_b) = (&mut out_a[..w], &mut out_b[..w]);
+                for ((c, a), b) in plan
+                    .columns
+                    .iter()
+                    .zip(out_a.iter_mut())
+                    .zip(out_b.iter_mut())
+                {
+                    (*a, *b) = self.column::<true>(c, aggregate);
+                }
+                to_db(out_a, &plan.tilt);
+                to_db(out_b, &plan.tilt);
+            }
+            None => {
+                let out_a = &mut out_a[..w];
+                for (c, a) in plan.columns.iter().zip(out_a.iter_mut()) {
+                    *a = self.column::<false>(c, aggregate).0;
+                }
+                to_db(out_a, &plan.tilt);
             }
         }
     }
 
-    fn blended_magnitude(
-        &self,
-        f0: f64,
-        f1: f64,
-        fc: f64,
-        aggregate: BandAggregate,
-        right: bool,
-    ) -> f64 {
-        // The band that owns the centre, blended with a neighbour inside a crossover.
-        let last = self.bands.len() - 1;
-        let idx = self.bands.iter().position(|b| fc < b.hi_hz).unwrap_or(last);
-        let mut primary = band_magnitude(&self.bands[idx], f0, f1, fc, aggregate, right);
+    /// Both channels' magnitudes for one column, in linear amplitude. Without `TWO`
+    /// only the left is read and the right is zero.
+    #[inline]
+    fn column<const TWO: bool>(&self, c: &Column, aggregate: BandAggregate) -> (f64, f64) {
+        let (mut a, mut b) = self.read::<TWO>(c.primary, aggregate);
+        for (r, t) in [c.upper, c.lower].into_iter().flatten() {
+            let (oa, ob) = self.read::<TWO>(r, aggregate);
+            a = a * (1.0 - t) + oa * t;
+            b = b * (1.0 - t) + ob * t;
+        }
+        (a, b)
+    }
 
-        if idx < last {
-            let lo = self.bands[idx].hi_hz / BLEND_RATIO;
-            if fc > lo {
-                let t = (log2_ratio(fc / lo) / log2_ratio(BLEND_RATIO)).min(1.0);
-                let other = band_magnitude(&self.bands[idx + 1], f0, f1, fc, aggregate, right);
-                primary = primary * (1.0 - t) + other * t;
+    #[inline]
+    fn read<const TWO: bool>(&self, r: Read, aggregate: BandAggregate) -> (f64, f64) {
+        match r {
+            Read::Bins { band, k0, k1 } => {
+                let b = &self.bands[band as usize];
+                let range = k0 as usize..=k1 as usize;
+                let (pl, pr) = (&b.pow_l[range.clone()], &b.pow_r[range]);
+                // The root of the largest power is the largest magnitude, to the bit.
+                let (x, y) = match aggregate {
+                    BandAggregate::Peak if TWO => {
+                        pl.iter().zip(pr).fold((0.0, 0.0), |(x, y), (&p, &q)| {
+                            (if p > x { p } else { x }, if q > y { q } else { y })
+                        })
+                    }
+                    BandAggregate::Peak => {
+                        (pl.iter().fold(0.0, |x, &p| if p > x { p } else { x }), 0.0)
+                    }
+                    BandAggregate::Energy if TWO => pl
+                        .iter()
+                        .zip(pr)
+                        .fold((0.0, 0.0), |(x, y), (&p, &q)| (x + p, y + q)),
+                    BandAggregate::Energy => (pl.iter().sum::<f64>(), 0.0),
+                };
+                (
+                    x.sqrt() * b.scale,
+                    if TWO { y.sqrt() * b.scale } else { 0.0 },
+                )
+            }
+            Read::Lerp { band, i0, i1, frac } => {
+                let b = &self.bands[band as usize];
+                let (i0, i1) = (i0 as usize, i1 as usize);
+                let lerp = |pow: &[f64]| {
+                    (pow[i0].sqrt() * b.scale) * (1.0 - frac) + (pow[i1].sqrt() * b.scale) * frac
+                };
+                (lerp(&b.pow_l), if TWO { lerp(&b.pow_r) } else { 0.0 })
             }
         }
-        if idx > 0 {
-            let hi = self.bands[idx - 1].hi_hz * BLEND_RATIO;
-            if fc < hi {
-                let t = (log2_ratio(hi / fc) / log2_ratio(BLEND_RATIO)).min(1.0);
-                let other = band_magnitude(&self.bands[idx - 1], f0, f1, fc, aggregate, right);
-                primary = primary * (1.0 - t) + other * t;
-            }
-        }
-        primary
     }
 }
 
-fn to_db(mag: f64, tilt: f64) -> f64 {
-    let db = if mag > 1e-12 {
-        20.0 * mag.log10() + tilt
-    } else {
-        FLOOR_DB
-    };
-    db.max(FLOOR_DB)
+/// Windows two channels into a transform's input: the real and imaginary parts are what
+/// `pick` makes of each pair of samples.
+#[inline]
+fn fill(
+    input: &mut [Complex<f64>],
+    window: &[f64],
+    left: &[f32],
+    right: &[f32],
+    pick: impl Fn(f32, f32) -> (f64, f64),
+) {
+    for (((d, &w), &a), &b) in input.iter_mut().zip(window).zip(left).zip(right) {
+        let (x, y) = pick(a, b);
+        *d = Complex::new(x * w, y * w);
+    }
 }
 
-fn band_magnitude(
-    b: &SubBand,
-    f0: f64,
-    f1: f64,
-    fc: f64,
-    aggregate: BandAggregate,
-    right: bool,
-) -> f64 {
-    let mag = if right { &b.mag_r } else { &b.mag_l };
+/// Magnitudes to dBFS in place, plus each column's tilt, floored at [`FLOOR_DB`].
+fn to_db(values: &mut [f64], tilt: &[f64]) {
+    for (v, &t) in values.iter_mut().zip(tilt) {
+        let db = if *v > 1e-12 {
+            20.0 * math::log10(*v) + t
+        } else {
+            FLOOR_DB
+        };
+        *v = db.max(FLOOR_DB);
+    }
+}
+
+/// Where the column `f0..f1` centred on `fc` reads band `b` (number `index`).
+fn plan_read(b: &SubBand, index: u32, f0: f64, f1: f64, fc: f64) -> Read {
     let half = (b.n / 2) as i64;
     let k0 = ((f0 / b.bin_width).ceil() as i64).max(0);
     let k1 = ((f1 / b.bin_width).floor() as i64).min(half);
-
     if k1 >= k0 {
-        let bins = &mag[k0 as usize..=k1 as usize];
-        return match aggregate {
-            BandAggregate::Energy => bins.iter().map(|m| m * m).sum::<f64>().sqrt(),
-            BandAggregate::Peak => bins.iter().fold(0.0, |m, &v| if v > m { v } else { m }),
+        return Read::Bins {
+            band: index,
+            k0: k0 as u32,
+            k1: k1 as u32,
         };
     }
-
-    // A column narrower than one bin: interpolate at its centre so the low end reads as
-    // a smooth ridge rather than a staircase.
     let pos = fc / b.bin_width;
     let i0 = (pos.floor() as i64).max(0);
     if i0 >= half {
-        return mag[half as usize];
+        let half = half as u32;
+        return Read::Bins {
+            band: index,
+            k0: half,
+            k1: half,
+        };
     }
-    let i1 = (i0 + 1).min(half);
-    let frac = pos - i0 as f64;
-    mag[i0 as usize] * (1.0 - frac) + mag[i1 as usize] * frac
+    Read::Lerp {
+        band: index,
+        i0: i0 as u32,
+        i1: (i0 + 1).min(half) as u32,
+        frac: pos - i0 as f64,
+    }
 }
 
 #[cfg(test)]

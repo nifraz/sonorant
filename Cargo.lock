@@ -1040,6 +1040,7 @@ dependencies = [
 name = "sonorant-core"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "sonorant-dsp",
  "sonorant-testdata",
  "half",

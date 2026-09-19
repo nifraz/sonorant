@@ -27,6 +27,7 @@ const MAX_BPM: f64 = 200.0;
 const OCTAVE_RATIO: f64 = 0.8;
 
 use crate::analyzer::FLOOR_DB;
+use crate::math;
 
 /// Onsets, tempo and spectral centroid from a stream of spectra.
 #[derive(Clone, Debug)]
@@ -160,7 +161,7 @@ impl MusicFeatures {
             let amp = if v <= FLOOR_DB {
                 0.0
             } else {
-                10.0f64.powf(v / 20.0)
+                math::db_to_amplitude(v)
             };
             energy += amp;
             weight += amp * i as f64;

@@ -1,4 +1,4 @@
-//! Forward FFTs and the magnitude spectra built on them.
+//! Forward FFTs and the power and magnitude spectra built on them.
 
 use std::fmt;
 use std::sync::Arc;
@@ -10,10 +10,15 @@ pub use rustfft::num_complex::Complex;
 ///
 /// Planning allocates; running does not. One instance is built per transform size when
 /// the analysis is configured and reused for every hop after that.
+///
+/// The spectrum functions transform whatever is in [`Fft::input_mut`], so a caller can
+/// window its samples straight into it instead of staging them in another buffer: at
+/// 16K points each staging copy is a quarter of a megabyte of memory traffic.
 pub struct Fft {
     n: usize,
     plan: Arc<dyn rustfft::Fft<f64>>,
-    buf: Vec<Complex<f64>>,
+    input: Vec<Complex<f64>>,
+    output: Vec<Complex<f64>>,
     scratch: Vec<Complex<f64>>,
 }
 
@@ -36,12 +41,15 @@ impl Fft {
             "FFT size must be a power of two"
         );
         let plan = FftPlanner::new().plan_fft_forward(n);
-        let scratch = vec![Complex::default(); plan.get_inplace_scratch_len()];
+        let scratch_len = plan
+            .get_inplace_scratch_len()
+            .max(plan.get_outofplace_scratch_len());
         Fft {
             n,
             plan,
-            buf: vec![Complex::default(); n],
-            scratch,
+            input: vec![Complex::default(); n],
+            output: vec![Complex::default(); n],
+            scratch: vec![Complex::default(); scratch_len],
         }
     }
 
@@ -55,6 +63,117 @@ impl Fft {
         self.plan.process_with_scratch(data, &mut self.scratch);
     }
 
+    /// The next transform's input, `n` points. Fill it with windowed samples: one real
+    /// signal in the real parts for [`Fft::transform_power`], or two with the left in
+    /// the real parts and the right in the imaginary parts for
+    /// [`Fft::transform_power_pair`]. The transforms leave it scrambled.
+    pub fn input_mut(&mut self) -> &mut [Complex<f64>] {
+        &mut self.input
+    }
+
+    /// Transforms [`Fft::input_mut`], a real windowed signal, into its power spectrum,
+    /// unscaled, and returns the scale: bin `k`'s magnitude in linear amplitude is
+    /// `out[k].sqrt() * scale`, which reads 1.0 for a full-scale sine whatever the
+    /// window or size. Writes bins 0..=n/2.
+    ///
+    /// The square root is left to whoever combines bins, because a peak or an energy
+    /// over many bins needs only one: a root per bin was most of what a hop cost after
+    /// the transform itself.
+    pub fn transform_power(&mut self, window_gain: f64, out: &mut [f64]) -> f64 {
+        self.plan.process_outofplace_with_scratch(
+            &mut self.input,
+            &mut self.output,
+            &mut self.scratch,
+        );
+        let n = self.n;
+        let half = n / 2;
+        for (o, c) in out[..=half].iter_mut().zip(&self.output) {
+            *o = c.re * c.re + c.im * c.im;
+        }
+        // DC and Nyquist have no mirror image: half the magnitude, a quarter the power.
+        out[0] *= 0.25;
+        out[half] *= 0.25;
+        // 2/N for the one-sided spectrum; the window gain undoes the window's attenuation.
+        2.0 / (n as f64 * window_gain)
+    }
+
+    /// Transforms [`Fft::input_mut`], two real windowed signals, into their power
+    /// spectra and returns their scale, as [`Fft::transform_power`].
+    ///
+    /// A real signal's spectrum is Hermitian, so the two separate afterwards:
+    /// `X[k] = (Z[k] + conj(Z[N-k])) / 2` and `Y[k] = (Z[k] - conj(Z[N-k])) / 2j`.
+    /// Stereo therefore costs one transform, not two.
+    pub fn transform_power_pair(
+        &mut self,
+        window_gain: f64,
+        out_left: &mut [f64],
+        out_right: &mut [f64],
+    ) -> f64 {
+        self.plan.process_outofplace_with_scratch(
+            &mut self.input,
+            &mut self.output,
+            &mut self.scratch,
+        );
+        let n = self.n;
+        let half = n / 2;
+        let z = &self.output;
+        for k in 0..=half {
+            let m = (n - k) & (n - 1); // N-k, wrapping k = 0 to 0
+            let (ar, ai) = (z[k].re, z[k].im);
+            let (br, bi) = (z[m].re, z[m].im);
+            let (lr, li) = (ar + br, ai - bi);
+            let (rr, ri) = (ai + bi, ar - br);
+            out_left[k] = lr * lr + li * li;
+            out_right[k] = rr * rr + ri * ri;
+        }
+        out_left[0] *= 0.25;
+        out_left[half] *= 0.25;
+        out_right[0] *= 0.25;
+        out_right[half] *= 0.25;
+        // The 0.5 from the separation cancels one factor of the one-sided 2/N.
+        1.0 / (n as f64 * window_gain)
+    }
+
+    /// Windows `input` and returns its power spectrum and scale; see
+    /// [`Fft::transform_power`].
+    pub fn power_real(
+        &mut self,
+        input: &[f64],
+        window: &[f64],
+        window_gain: f64,
+        out: &mut [f64],
+    ) -> f64 {
+        let n = self.n;
+        for ((b, &x), &w) in self.input.iter_mut().zip(&input[..n]).zip(&window[..n]) {
+            *b = Complex::new(x * w, 0.0);
+        }
+        self.transform_power(window_gain, out)
+    }
+
+    /// Windows `left` and `right` and returns their power spectra and scale; see
+    /// [`Fft::transform_power_pair`].
+    pub fn power_real_pair(
+        &mut self,
+        left: &[f64],
+        right: &[f64],
+        window: &[f64],
+        window_gain: f64,
+        out_left: &mut [f64],
+        out_right: &mut [f64],
+    ) -> f64 {
+        let n = self.n;
+        for (((b, &l), &r), &w) in self
+            .input
+            .iter_mut()
+            .zip(&left[..n])
+            .zip(&right[..n])
+            .zip(&window[..n])
+        {
+            *b = Complex::new(l * w, r * w);
+        }
+        self.transform_power_pair(window_gain, out_left, out_right)
+    }
+
     /// Magnitude spectrum of a real windowed signal in linear amplitude, scaled so a
     /// full-scale sine reads 1.0 whatever the window or size. Writes bins 0..=n/2.
     pub fn magnitude_real(
@@ -64,29 +183,14 @@ impl Fft {
         window_gain: f64,
         out: &mut [f64],
     ) {
-        let n = self.n;
-        for ((b, &x), &w) in self.buf.iter_mut().zip(&input[..n]).zip(&window[..n]) {
-            *b = Complex::new(x * w, 0.0);
+        let scale = self.power_real(input, window, window_gain, out);
+        for o in &mut out[..=self.n / 2] {
+            *o = o.sqrt() * scale;
         }
-        self.plan
-            .process_with_scratch(&mut self.buf, &mut self.scratch);
-
-        // 2/N for the one-sided spectrum; the window gain undoes the window's attenuation.
-        let scale = 2.0 / (n as f64 * window_gain);
-        let half = n / 2;
-        for (o, c) in out[..=half].iter_mut().zip(&self.buf) {
-            *o = (c.re * c.re + c.im * c.im).sqrt() * scale;
-        }
-        out[0] *= 0.5;
-        out[half] *= 0.5;
     }
 
-    /// Magnitude spectra of two real signals from one complex transform.
-    ///
-    /// The left signal goes in the real part and the right in the imaginary part. A real
-    /// signal's spectrum is Hermitian, so the two separate afterwards:
-    /// `X[k] = (Z[k] + conj(Z[N-k])) / 2` and `Y[k] = (Z[k] - conj(Z[N-k])) / 2j`.
-    /// Stereo therefore costs one transform, not two. Scaled as [`Fft::magnitude_real`].
+    /// Magnitude spectra of two real signals from one complex transform, scaled as
+    /// [`Fft::magnitude_real`]. See [`Fft::transform_power_pair`].
     pub fn magnitude_real_pair(
         &mut self,
         left: &[f64],
@@ -96,30 +200,11 @@ impl Fft {
         out_left: &mut [f64],
         out_right: &mut [f64],
     ) {
-        let n = self.n;
-        for (i, b) in self.buf.iter_mut().enumerate() {
-            let w = window[i];
-            *b = Complex::new(left[i] * w, right[i] * w);
+        let scale = self.power_real_pair(left, right, window, window_gain, out_left, out_right);
+        let half = self.n / 2;
+        for o in out_left[..=half].iter_mut().chain(&mut out_right[..=half]) {
+            *o = o.sqrt() * scale;
         }
-        self.plan
-            .process_with_scratch(&mut self.buf, &mut self.scratch);
-
-        // The 0.5 from the separation cancels one factor of the one-sided 2/N.
-        let scale = 1.0 / (n as f64 * window_gain);
-        let half = n / 2;
-        for k in 0..=half {
-            let m = (n - k) & (n - 1); // N-k, wrapping k = 0 to 0
-            let (ar, ai) = (self.buf[k].re, self.buf[k].im);
-            let (br, bi) = (self.buf[m].re, self.buf[m].im);
-            let (lr, li) = (ar + br, ai - bi);
-            let (rr, ri) = (ai + bi, ar - br);
-            out_left[k] = (lr * lr + li * li).sqrt() * scale;
-            out_right[k] = (rr * rr + ri * ri).sqrt() * scale;
-        }
-        out_left[0] *= 0.5;
-        out_left[half] *= 0.5;
-        out_right[0] *= 0.5;
-        out_right[half] *= 0.5;
     }
 }
 
