@@ -57,11 +57,11 @@ possible, and follows whatever player is running instead of living inside one.
 
 ## Progress
 
-*As of 2026-09-20, the end of the second working session.* Phases 0 to 3 are done apart
-from the checks that need other machines or CI, and three pieces of Phase 3 that can
-only be finished in a later phase (below). The three targets missed in the first session
-are met or explained (see [Measurements](#measurements)). The next session starts Phase
-4 at [Next](#next).
+*As of 2026-09-20, the end of the fourth working session.* Phases 0 to 5 are written,
+apart from the checks that need other machines, a real player or CI. Every piece Phase 3
+deferred has now arrived: the backdrop in Phase 4, and the harmonic ruler and the quick
+bar here. The three targets missed in the first session are met or explained (see
+[Measurements](#measurements)). The next session starts Phase 6 at [Next](#next).
 
 **Phase 0 (repository, CI, skeleton): done, except clean frame pacing and CI**
 
@@ -237,22 +237,100 @@ top corners.
   skipped. Until then those players show the empty frame on Ubuntu. On Windows it does
   not arise: SMTC hands over the thumbnail itself.
 
+**Phase 5 (app shell): written; the scaling and parity checks need other machines**
+
+- [x] **The menu is a model** (`sonorant-core::menu`). `MenuFactory.cs` built the menu in
+  code, and Nostalgia+'s keyboard handler and help text held the same knowledge
+  separately, so the three drifted. Here one tree of items carries each item's label, its
+  state, its shortcut, its help line and the action it performs; `tree` builds it from
+  the current state, and the menu, the keys and the help search all read it. Tests assert
+  that no key is bound twice, that every command explains itself, and that a key does
+  what its own menu item does.
+- [x] **Actions name a setting** rather than reaching for a field, so a switch, a number
+  or a choice is one value the model can apply, mark as current and search. `Flag` covers
+  all 50 switches and `Number` the 21 numbers, each with the range it is held inside; a
+  test flips every flag and shows it moves nothing else. What the model cannot do itself,
+  because it needs the settings folder, comes back as an `Effect`.
+- [x] **Keys:** `Space`, `F11`, `Esc`, `I`, `A`, `O`, `G`, `W`, `P`, `B`, `C` and `F1`.
+  The plugin's bindings weren't in the exported reference, so the eight the checklist
+  names were mapped to what they most plainly stand for, and `B` (the next curve style,
+  which the skeleton already had), `C` (the next palette) and `F1` (help) were added
+  beside them. **A click no longer freezes:** a double-click over the image seeks, and
+  two meanings for one button on the same pixels is worse than one key.
+- [x] **The hover readout** (`render/hover.rs`): the frequency under the pointer in
+  hertz and as a note with its deviation in cents, each channel's level at that
+  frequency, and how far back in time the column is. `sync_hover` reads out both panes,
+  `show_hover_pin` stamps the reading onto all three label columns, and `show_harmonics`
+  draws the **harmonic ruler** — Phase 3's second deferred piece — as ghost lines at
+  whole multiples of the hovered frequency, each fainter than the last.
+- [x] **The quick bar** (`render/quickbar.rs`), Phase 3's last deferred piece. `Reserve`
+  and `HeightFor` carry over with their tests: the strip is taken off the top of the view
+  before the panes are laid out, rather than drawn over the image, so nothing it covers
+  is analysis and a button is never also a row of the image. Its buttons are `Action`s
+  from the menu model, so a button and its menu item cannot come to mean different
+  things. Split around the gutter, the axis runs from the top of the window unbroken.
+- [x] **The help window and the name dialog.** Help is the menu tree flattened, searched
+  by path, help line or key, and clicking an entry performs it. The name dialog saves the
+  settings as a preset of your own; the button says "Replace" when the name is taken.
+- [x] **Presets:** the eight built-in ones and the user's own, loaded, saved and deleted
+  from the menu. Changing anything marks the settings `Custom`, so the list stops
+  claiming a preset the settings have moved away from.
+- [x] **Immersive mode's fade** (`chrome.rs`): with `auto_hide`, the scales, the deck,
+  the quick bar, the status line and the readout fade out after 2.5 s of nothing
+  happening, and the pointer goes with them. A moved pointer, a key or an open menu
+  brings them back at once rather than fading in. The layout doesn't move when they go:
+  relaying out would make the history jump, which is worse than the pixels are worth.
+- [x] **The transport works.** The deck's buttons and its seek bar reach
+  `NowPlaying::send`, which still refuses a control the player says it cannot do, and a
+  double-click on a spectrogram column asks the player for that moment.
+- [x] **The OS accent colour and dark or light** replace MusicBee's skin colours:
+  `UISettings` on Windows, the XDG settings portal on Linux. The accent fills in the
+  hover slot when no colour was chosen for it, without being written into the saved
+  theme, so it follows the desktop instead of freezing at whatever it was on the day.
+  Dark or light picks egui's theme.
+- [x] **HiDPI.** The panes stay in physical pixels, so the image keeps a row to a pixel
+  and loses no detail at 150%; every fixed size around them — the deck, the gutter, the
+  label columns, the scale strip, the bars and the quick bar's air — is scaled to the
+  display. `ScopeLayout::new`, `BandLayout` and `DeckLayout::new` take the scale, and the
+  36 reference deck layouts pass it 1.0 and still match rectangle for rectangle.
+- [x] **Keep the screen awake** while fullscreen and playing:
+  `SetThreadExecutionState` on Windows, the inhibit portal on Linux.
+- [x] **The frame-rate cap** works: `TargetFps` became display, 60 or 30, and the loop
+  sleeps to it rather than spinning. Scrolling follows audio time whatever it is, so the
+  cap changes how often the screen is redrawn and nothing about the picture.
+- [ ] **The parity checklist**, on GNOME Wayland at 100%, 125% and 200% and on Windows 10
+  and 11. Only 100% on Windows 10 has been seen. The scaled layout is written and its
+  arithmetic is tested, but no one has looked at it on a scaled screen.
+- [ ] **The transport and the seek bar against a real player.** They are wired to the
+  same `send` Phase 4 left guarded, and nothing has pressed them with a player running.
+
 ### Next
 
-Phase 5, the app shell: the views, every key and hover readout, the menu built from the
-model, presets, the OS accent colour, and the HiDPI pass. Two pieces from Phase 3 are
-waiting there for it - the harmonic ruler, which is drawn from the hover position, and
-the quick bar, whose buttons need input to do anything. Phase 4 leaves the deck's
-transport wired on the inside but with nothing to press it: `NowPlaying::send` already
-refuses a control the player says it cannot do, and Phase 5 connects the buttons.
+Phase 6, the new visuals: the phosphor scope, the zoomable long history, the 3D
+waterfall, the beat-reactive backdrop and the quality setting. The history store already
+holds more than the screen shows and the spectrogram pass already maps any axis and range
+per pixel, so zooming is mostly a matter of what the panes ask it for; `px_per_row` and
+the hover's age-at-a-column arithmetic are the beginnings of it.
+
+**A flaky golden, found here and not caused here.** `the_scene_renders_as_it_did` fails
+about one run in three on WARP, always on the same single column of pixels: x=477, where
+the right pane's curve strip begins and its viewport's left edge falls. The same test
+binary passes and fails across runs with the layout identical every time (gutter
+443..477, the strip's base column at 477), so it is a rasterisation edge case at the
+viewport boundary rather than a change in what is drawn. It predates this session — the
+test was run at HEAD to check. Worth fixing before CI, where a one-in-three flake is
+worse than here: either draw the strip without a viewport, using a scissor or the rect
+in the shader, or widen the golden's tolerance for a single boundary column. Not fixed
+here because it is Phase 3's renderer and wants a careful look rather than a guess.
 
 Before that, or alongside it, the things that need a machine this one isn't: push to
 GitHub and get CI green, which is the first PipeWire build and the first lavapipe
-golden; then the player checks above. Two smaller things carried over: the first frame's
-100-odd ms of lazy initialisation (logged as a stall) could move into start-up, and the
-deck's fixed pixel sizes are laid out in physical pixels, which is right at 100% scaling
-and cramped at 150% until Phase 5's HiDPI pass. One new one: swapping the capture source
-happens on the frame loop's thread, so following a player costs a frame.
+golden; then the player checks in Phase 4 and the scaling checks above. Carried over:
+the first frame's 100-odd ms of lazy initialisation (logged as a stall) could move into
+start-up, and swapping the capture source happens on the frame loop's thread, so
+following a player costs a frame. Two new ones: the settings are only written on exit,
+so a crash loses what the menu changed, and the history is sized for five minutes at the
+scroll speed it started with, so changing the speed changes how far back it reaches.
 
 ### Measurements
 
@@ -700,45 +778,47 @@ Phase 0 has no dependencies. Phases 1 and 2 can run in parallel after it.
 
 ### Now playing (Phase 4)
 
-- [ ] Artwork, title, composer, artists, album, year
-- [ ] Transport, seek bar, clock
-- [ ] Double-click a spectrogram column to seek there
-- [ ] Per-track resets
+- [x] Artwork, title, composer, artists, album, year
+- [x] Transport, seek bar, clock
+- [x] Double-click a spectrogram column to seek there
+- [x] Per-track resets
 
 ### App shell (Phase 5)
 
-- [ ] Windowed view (the old docked panel)
-- [ ] Fullscreen mirrored stereo view
-- [ ] Immersive mode, including furniture fade, cursor hiding and cinematic mode
-- [ ] Keys: `Esc`/`F11`, `I`, `Space`, `A`, `W`, `O`, `G`, `P`
-- [ ] Hover readout: frequency, note ± cents, level for each channel, time offset. Synced
+- [x] Windowed view (the old docked panel)
+- [x] Fullscreen mirrored stereo view
+- [x] Immersive mode, including furniture fade, cursor hiding and cinematic mode
+- [x] Keys: `Esc`/`F11`, `I`, `Space`, `A`, `W`, `O`, `G`, `P`, and `B`, `C` and `F1`
+      beside them
+- [x] Hover readout: frequency, note ± cents, level for each channel, time offset. Synced
       hover and hover pin
-- [ ] Freeze, amber reference curve
-- [ ] Right-click menu, including the centre deck switches, graph size, deck height and
+- [x] Freeze, amber reference curve
+- [x] Right-click menu, including the centre deck switches, graph size, deck height and
       curve width
-- [ ] Help window with search, name dialog
-- [ ] Presets: Studio, Nostalgia, QC, Immersive, and user presets
+- [x] Help window with search, name dialog
+- [x] Presets: Studio, Nostalgia, QC, Immersive, and user presets
 
 ### Replaced
 
-- [ ] MusicBee skin colours become the OS accent colour and dark/light preference
-- [ ] The MusicBee "Toggle fullscreen" command becomes F11 inside the app. A global
+- [x] MusicBee skin colours become the OS accent colour and dark/light preference
+- [x] The MusicBee "Toggle fullscreen" command becomes F11 inside the app. A global
       shortcut can follow later (the GlobalShortcuts portal on Linux, `RegisterHotKey` on
       Windows)
-- [ ] `TargetFps` becomes a frame-rate cap (display, 60 or 30), and `ScrollDivider`
+- [x] `TargetFps` becomes a frame-rate cap (display, 60 or 30), and `ScrollDivider`
       becomes a scroll speed in rows per second
 
 ### New in Sonorant
 
-- [ ] Display-rate rendering with scrolling driven by audio time
-- [ ] Capture only the player's audio
-- [ ] Palette, axis and zoom changes redraw the whole history
+- [x] Display-rate rendering with scrolling driven by audio time
+- [x] Capture only the player's audio
+- [x] Palette, axis and zoom changes redraw the whole history
 - [ ] Phosphor scope with bloom
 - [ ] Zoomable long history
 - [ ] 3D waterfall view
 - [ ] Beat-reactive shader backdrop
-- [ ] Screen stays awake while fullscreen and playing
-- [ ] Menus, help and dialogs readable by screen readers
+- [x] Screen stays awake while fullscreen and playing
+- [ ] Menus, help and dialogs readable by screen readers (AccessKit is attached; nothing
+      has been read with Orca or Narrator yet — Phase 7)
 
 ## Risks
 

@@ -66,16 +66,40 @@ cargo run --release -- capture --seconds 10   # no window: print loudness once a
 cargo run --release -- apps                   # the apps that can be captured alone
 ```
 
-Right-click for the provisional menu. **Space** or a click freezes the picture while
-analysis carries on, **F11** toggles fullscreen, **A** holds the average spectrum as an
-amber reference (and drops it), **B** cycles the curve between line, bars and LED, and
-**I** turns on immersive mode, with the glow, the beat flare and the palette drifting
-with the music's brightness. The status line shows what is being
-captured, loudness and tempo, the frame rate, the 99th percentile frame interval and the
-refreshes missed. On exit the pacing figures for the whole run are logged.
+Right-click for the menu: presets, what is captured, and every setting, each with its
+key alongside it and a line saying what it does. **F1** opens the same list as a
+searchable window, and clicking an entry there does it.
 
-Settings live in `%APPDATA%\Sonorant` or `~/.config/sonorant`. On the first run on
-Windows, Nostalgia+'s settings, presets and themes are brought over from MusicBee.
+| Key | |
+|---|---|
+| `Space` | Freeze the picture; analysis carries on |
+| `F11`, `Esc` | Fullscreen, and back |
+| `I` | Immersive mode: the glow, the beat flare, a fading chrome and the palette drifting with the music's brightness |
+| `A` | Hold the average spectrum in amber to compare against, or drop it |
+| `O` | The on-screen readouts: the hover box, the quick bar and the status line |
+| `G` | The frequency grid |
+| `W` | The waveform lanes |
+| `P` | The peak trace |
+| `B`, `C` | The next curve style, the next palette |
+| `F1` | Help |
+
+Point at a pane to read out the frequency under the pointer, as hertz and as a note with
+its deviation in cents, each channel's level there, and how far back in time the column
+is. `Hover` in the menu adds ghost lines at the harmonics of that frequency and stamps
+the reading onto the axis. Double-clicking a column of the image sends the player to that
+moment, and the deck's transport buttons and seek bar work on whatever player is being
+followed. The strip of buttons over the image is the quick bar, for the switches reached
+most often; it can be made compact or switched off.
+
+The status line shows what is being captured, loudness and tempo, the frame rate, the
+99th percentile frame interval and the refreshes missed. On exit the pacing figures for
+the whole run are logged.
+
+Settings live in `%APPDATA%\Sonorant` or `~/.config/sonorant`, and are saved on exit.
+Presets you save go beside them, and the menu loads and deletes them. On the first run on
+Windows, Nostalgia+'s settings, presets and themes are brought over from MusicBee. The
+desktop's accent colour and its dark or light preference stand in for the skin colours
+the MusicBee plugin took from its host.
 
 ## Tests
 
@@ -103,7 +127,8 @@ cargo check -p sonorant-platform --target x86_64-unknown-linux-gnu --no-default-
 crates/
   sonorant-dsp/       FFT bank, loudness and true peak, dynamic range, features
   sonorant-core/      settings, presets, palettes, menu model, analysis engine
-  sonorant-platform/  PipeWire and MPRIS on Linux; WASAPI and SMTC on Windows
+  sonorant-platform/  PipeWire, MPRIS and the portals on Linux; WASAPI, SMTC
+                      and UISettings on Windows
   sonorant-render/    wgpu passes and WGSL shaders
   sonorant/           the app: window, input, egui menus and dialogs
   sonorant-testdata/  loads the reference vectors for tests
