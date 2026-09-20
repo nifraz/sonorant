@@ -29,6 +29,7 @@ use crate::nowplaying::NowPlaying;
 use crate::options::Options;
 use crate::pacing::FramePacing;
 use crate::present::PresentMonitor;
+use crate::timeview::{Strip, TimeView};
 use crate::ui::{Around, Ask, Shell, Status};
 use sonorant_core::source::SourceStatus;
 
@@ -43,6 +44,18 @@ const STATUS_EVERY: Duration = Duration::from_millis(250);
 const COLOUR_BAR_WIDTH: i32 = 40;
 /// A frame interval this long is logged with where the time went.
 const STALL: Duration = Duration::from_millis(100);
+/// Bytes one row of history costs on the GPU: the grid, as Float16 pairs.
+const ROW_BYTES: u64 = GRID_BINS as u64 * 4;
+/// The most the history store may take. The plan's memory target is under 300 MB with
+/// five minutes of history, which at the default speed is about 150 MB, so this leaves
+/// a slower speed or a longer setting somewhere to grow into without the two of them
+/// together asking for a gigabyte.
+const HISTORY_BUDGET: u64 = 256 << 20;
+
+/// How far the wheel may zoom time, either side of the pixels-a-row setting. Past
+/// twenty a row is wider than most windows, and under a twentieth a pixel is twenty
+/// rows, which is where the history runs out long before the zoom does.
+const ZOOM_RANGE: (f64, f64) = (0.05, 20.0);
 /// The longest gap the phosphor treats as one frame. A longer one means the window was
 /// hidden or the app was stalled, where fading a quarter of a second at a time is both
 /// right to look at and a bound on how much trace one frame can draw.
@@ -141,6 +154,18 @@ struct Running {
     capture_failed: Option<(Input, Instant)>,
     columns: usize,
     held: Option<u64>,
+    /// Where along the history the image is looking: the zoom, and how far back.
+    view: TimeView,
+    /// The row `Space` froze the image on, which is not the same thing as the view
+    /// having been moved. See `settle_view`.
+    frozen_at: Option<u64>,
+    /// The row the wheel or a drag parked the image's newest edge on. Absolute, not a
+    /// distance back from now: rows keep arriving behind a parked view, and a distance
+    /// would carry the image forward with them.
+    parked_at: Option<u64>,
+    /// Rows the store was last asked for, so the length setting and the scroll speed
+    /// are only acted on when one of them moves.
+    history_rows: u32,
     pacing: FramePacing,
     presented: PresentMonitor,
     /// How long the last frame's CPU work took, from acquire to present.
@@ -254,9 +279,15 @@ impl App {
         );
         steps.mark("ui");
 
-        // Five minutes at the settings' scroll speed.
-        let rows = (settings.rows_per_second.max(1.0) * 300.0) as u32;
+        let rows = history_rows(&settings);
         let history = HistoryStore::new(&gpu.device, GRID_BINS as u32, rows);
+        log::info!(
+            "history: {} rows, {:.1} minutes at {:.0} rows a second, {} MB",
+            history.capacity(),
+            history.capacity() as f64 / settings.effective_rows_per_second().max(1.0) / 60.0,
+            settings.effective_rows_per_second(),
+            history.capacity() * ROW_BYTES / (1 << 20),
+        );
         let mut spectrogram = SpectrogramPass::new(&gpu.device, bloom::TARGET_FORMAT);
         spectrogram.bind(&gpu.device, &history);
         let lut = palette::build_lut(settings.palette);
@@ -376,6 +407,10 @@ impl App {
             capture_failed: None,
             columns,
             held: None,
+            view: TimeView::default(),
+            frozen_at: None,
+            parked_at: None,
+            history_rows: rows,
             pacing: FramePacing::new(refresh_hz),
             presented: PresentMonitor::default(),
             last_work: Duration::ZERO,
@@ -777,6 +812,7 @@ impl Running {
         self.menu_open = area.menu_open;
         self.double_clicked = area.double_clicked;
         self.clicked = area.clicked;
+        self.move_through_history(&area, full_output.pixels_per_point);
         let alpha = self.fade(now, &area);
         for ask in self.shell.take_asks() {
             self.carry_out(&ask);
@@ -844,7 +880,7 @@ impl Running {
                 rect: p.spectro.to_f32(),
                 channel: i as u32,
                 newest_left: p.curve_on_left,
-                visible_rows: (p.spectro.w as f32 / self.px_per_row() as f32).max(1.0),
+                visible_rows: (f64::from(p.spectro.w) / self.px_per_row_now()).max(1.0) as f32,
                 frac: frac as f32,
                 scale: map.scale,
                 fmin: map.fmin as f32,
@@ -903,7 +939,7 @@ impl Running {
             map: &map,
             floor_db: self.range.0,
             ceiling_db: self.range.1,
-            px_per_second: rps * self.px_per_row() as f64,
+            px_per_second: rps * self.px_per_row_now(),
             scale: ppp,
             alpha,
             top_inset: inset,
@@ -948,7 +984,14 @@ impl Running {
                 .measure(text, sonorant_render::Face::Sans, label_px)
                 .w
         };
-        self.quick_bar = QuickBar::new(quick, self.layout.gutter, &drawn, ppp, &mut measure);
+        self.quick_bar = QuickBar::new(
+            quick,
+            self.layout.gutter,
+            &drawn,
+            self.held.is_some(),
+            ppp,
+            &mut measure,
+        );
         self.press_quick_bar(ppp);
         let under = self
             .pointer
@@ -1399,7 +1442,17 @@ impl Running {
             line += &format!("  |  GPU {:.1} ms", self.timer.total_ms());
         }
         if self.shell.session.frozen {
-            line += "  |  FROZEN";
+            // Where it is looking, not merely that it has stopped: parked in the
+            // history, the one thing worth knowing is how far back.
+            let back = self.parked_rows() / self.settings.effective_rows_per_second().max(1.0);
+            if back >= 0.5 {
+                line += &format!("  |  FROZEN {back:.0} s back");
+            } else {
+                line += "  |  FROZEN";
+            }
+        }
+        if (self.view.zoom - 1.0).abs() > 0.01 {
+            line += &format!("  |  zoom {:.2}x", self.view.zoom);
         }
         line
     }
@@ -1480,7 +1533,38 @@ impl Running {
     fn apply_settings(&mut self) {
         let session = self.shell.session.clone();
         if session.frozen != self.applied_session.frozen {
-            self.held = session.frozen.then(|| self.history.written());
+            if session.frozen {
+                self.frozen_at = Some(self.history.written());
+            } else {
+                // Unfreezing is a way back to now, whether the image was frozen there or
+                // taken back through the history by the wheel.
+                self.frozen_at = None;
+                self.parked_at = None;
+                self.view.offset = 0.0;
+            }
+            self.settle_view();
+        }
+        let rows = history_rows(&self.settings);
+        if rows != self.history_rows {
+            // A different size is a different ring, so what is in it goes. Better than
+            // the alternative, which was the reach depending on the speed the app
+            // happened to start at.
+            self.history_rows = rows;
+            self.history = HistoryStore::new(&self.gpu.device, GRID_BINS as u32, rows);
+            self.spectrogram.bind(&self.gpu.device, &self.history);
+            self.held = None;
+            self.frozen_at = None;
+            self.parked_at = None;
+            self.view.offset = 0.0;
+            self.shell.session.parked = false;
+            log::info!(
+                "history resized to {} rows, {:.1} minutes at {:.0} rows a second",
+                self.history.capacity(),
+                self.history.capacity() as f64
+                    / self.settings.effective_rows_per_second().max(1.0)
+                    / 60.0,
+                self.settings.effective_rows_per_second(),
+            );
         }
         if session.reference != self.applied_session.reference {
             self.take_reference(session.reference);
@@ -1713,8 +1797,9 @@ impl Running {
             &self.layout,
             map,
             at,
-            f64::from(self.px_per_row()),
+            self.px_per_row_now(),
             rows_per_second,
+            self.parked_rows() / rows_per_second.max(1e-9),
         ) else {
             return;
         };
@@ -1815,6 +1900,127 @@ impl Running {
     fn px_per_row(&self) -> u32 {
         self.settings.px_per_row.clamp(1, 8) as u32
     }
+
+    /// Pixels one row is drawn across, the setting stretched by however far the wheel
+    /// has zoomed. Everything that turns pixels into time reads this, not the setting:
+    /// the panes, the time marks and the hover readout, which is what keeps them
+    /// agreeing about where a column is.
+    fn px_per_row_now(&self) -> f64 {
+        f64::from(self.px_per_row()) * self.view.zoom
+    }
+
+    /// Rows the newest edge of the image is behind the newest row there is. Zero while
+    /// the view is live.
+    fn parked_rows(&self) -> f64 {
+        match self.held {
+            Some(anchor) => self.history.written().saturating_sub(anchor) as f64,
+            None => 0.0,
+        }
+    }
+
+    /// The wheel zooms time about the pointer and a drag pans through the history.
+    ///
+    /// Both work on the anchor the freeze already had: the row the image's newest edge
+    /// sits on. Parking the view is freezing it, so the Freeze item, the status line and
+    /// `Space` all keep saying the truth, and the way back is `End`, the Live button or
+    /// unfreezing.
+    fn move_through_history(&mut self, area: &crate::ui::Area, ppp: f32) {
+        if std::mem::take(&mut self.shell.session.go_live) {
+            self.view = TimeView::default();
+            self.frozen_at = None;
+            self.parked_at = None;
+            self.settle_view();
+            return;
+        }
+        let turned = area.scrolled.abs() > 0.01;
+        let dragged = area.dragged.unwrap_or(0.0);
+        if !turned && dragged == 0.0 {
+            self.settle_view();
+            return;
+        }
+        // The pane under the pointer decides which way time runs; without one, the
+        // first, which is the one a mirrored layout agrees with.
+        let pointer = self
+            .pointer
+            .map(|p| ((p.x * ppp).round() as i32, (p.y * ppp).round() as i32));
+        let Some(pane) = pointer
+            .and_then(|(x, y)| self.layout.panes.iter().find(|p| p.spectro.contains(x, y)))
+            .or_else(|| self.layout.panes.first())
+        else {
+            self.settle_view();
+            return;
+        };
+        let (rect, newest_left) = (pane.spectro, pane.curve_on_left);
+        if rect.w <= 0 {
+            self.settle_view();
+            return;
+        }
+        let strip = Strip {
+            width: f64::from(rect.w),
+            px_per_row: f64::from(self.px_per_row()),
+        };
+        self.view.offset = self.parked_rows();
+
+        if turned {
+            // A notch of the wheel is about 50 points.
+            let along = match pointer {
+                Some((x, _)) => {
+                    let t = (f64::from(x - rect.x) / f64::from(rect.w)).clamp(0.0, 1.0);
+                    if newest_left { t } else { 1.0 - t }
+                }
+                None => 0.0,
+            };
+            let notches = f64::from(area.scrolled) / 50.0;
+            self.view.zoom_about(notches, along, strip, ZOOM_RANGE);
+        }
+        if dragged != 0.0 {
+            self.view
+                .pan(f64::from(dragged) * f64::from(ppp), newest_left, strip);
+        }
+
+        let written = self.history.written();
+        self.view
+            .clamp_to(written as f64, self.history.capacity() as f64, strip);
+        // From a distance back to the row itself, now, while `written` is the one the
+        // distance was measured from.
+        self.parked_at = self
+            .view
+            .parked()
+            .then(|| written.saturating_sub(self.view.offset.round() as u64));
+        self.settle_view();
+    }
+
+    /// Works out the row the image's newest edge sits on, and tells the session what it
+    /// came to.
+    ///
+    /// Two things can hold the image still, and they are kept apart on purpose. `Space`
+    /// freezes it where it is, which is `frozen_at`. The wheel and a drag park it
+    /// somewhere in the history, which is `parked_at`. A parked view wins, because it is
+    /// the more particular of the two; with the view back at now, the freeze is what is
+    /// left. Rolling them into one flag looked tidier and was wrong: zooming back to now
+    /// could not get out of the freeze that zooming away from it had switched on.
+    fn settle_view(&mut self) {
+        self.held = self.parked_at.or(self.frozen_at);
+        // The menu item, the status line and the quick bar all read one answer.
+        let held = self.held.is_some();
+        self.shell.session.frozen = held;
+        self.applied_session.frozen = held;
+        self.shell.session.parked = held;
+    }
+}
+
+/// Rows the store should hold: the length setting at the scroll speed, held under the
+/// memory budget.
+///
+/// Nostalgia+ had no history to speak of, and until now this was five minutes at
+/// whatever speed the app started with, so changing the speed quietly changed how far
+/// back the image reached. It is the setting's job now, and the store is rebuilt when
+/// either moves.
+fn history_rows(s: &Settings) -> u32 {
+    let wanted =
+        s.effective_rows_per_second().max(1.0) * 60.0 * f64::from(s.history_minutes.clamp(1, 15));
+    let affordable = (HISTORY_BUDGET / ROW_BYTES) as f64;
+    wanted.min(affordable).max(64.0) as u32
 }
 
 /// The model's name for a backend present mode.
@@ -1832,5 +2038,71 @@ fn present_mode_of(p: Presentation) -> wgpu::PresentMode {
         Presentation::EveryRefresh => wgpu::PresentMode::Fifo,
         Presentation::Newest => wgpu::PresentMode::Mailbox,
         Presentation::Immediate => wgpu::PresentMode::Immediate,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_history_reaches_as_far_back_as_the_setting_asks() {
+        let at = |minutes, rows_per_second| {
+            history_rows(&Settings {
+                history_minutes: minutes,
+                rows_per_second,
+                ..Settings::default()
+            })
+        };
+        // The default: five minutes at sixty rows a second.
+        assert_eq!(at(5, 60.0), 18_000);
+        assert_eq!(at(1, 60.0), 3_600);
+        // The reach is the setting's, not the speed's. This is what it is here for:
+        // before, the store was five minutes at whatever speed the app started at, so
+        // halving the speed quietly doubled how far back the image went.
+        assert_eq!(at(5, 30.0), 9_000);
+        assert_eq!(at(3, 120.0), 21_600);
+        // Past the budget the setting is a request rather than a promise: a row costs
+        // the same whatever the speed, and ten minutes at the default is already 288 MB.
+        // The app logs the reach it settled on.
+        let most = (HISTORY_BUDGET / ROW_BYTES) as u32;
+        assert_eq!(at(10, 60.0), most);
+        assert_eq!(at(5, 120.0), most);
+    }
+
+    #[test]
+    fn the_history_stops_at_the_memory_budget() {
+        let most = (HISTORY_BUDGET / ROW_BYTES) as u32;
+        let greedy = history_rows(&Settings {
+            history_minutes: 15,
+            rows_per_second: 240.0,
+            ..Settings::default()
+        });
+        assert_eq!(
+            greedy, most,
+            "15 minutes at 240 rows a second is not affordable"
+        );
+        assert!(
+            u64::from(greedy) * ROW_BYTES <= HISTORY_BUDGET,
+            "{greedy} rows is over the budget"
+        );
+    }
+
+    /// Cinematic quarters the scroll speed, and the reach follows the speed the rows
+    /// are really cut at rather than the number in the settings.
+    #[test]
+    fn the_reach_follows_the_speed_the_rows_are_really_cut_at() {
+        let plain = history_rows(&Settings {
+            history_minutes: 5,
+            rows_per_second: 60.0,
+            ..Settings::default()
+        });
+        let cinematic = history_rows(&Settings {
+            history_minutes: 5,
+            rows_per_second: 60.0,
+            imm_cinematic: true,
+            ..Settings::default()
+        });
+        assert_eq!(cinematic, plain / 4);
     }
 }

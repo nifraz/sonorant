@@ -85,10 +85,13 @@ impl QuickBar {
     ///
     /// With `quick_bar_split` and a gutter to split around, they go in two groups either
     /// side of it, so the frequency axis runs from the top of the window unbroken.
+    /// `parked` is whether the image is somewhere back in the history rather than on
+    /// now, which puts the way back at the head of the bar.
     pub fn new(
         bounds: Rect,
         gutter: Rect,
         s: &Settings,
+        parked: bool,
         scale: f32,
         measure: MeasureWidth<'_>,
     ) -> QuickBar {
@@ -102,7 +105,7 @@ impl QuickBar {
         let px = |n: i32| (n as f32 * scale).round() as i32;
         let (pad, gap) = (px(PAD), px(GAP));
         let compact = s.flag(Flag::QuickBarCompact);
-        let mut buttons = buttons(s);
+        let mut buttons = buttons(s, parked);
         let widths: Vec<i32> = buttons
             .iter()
             .map(|b| measure(&b.text(compact)).ceil() as i32 + pad * 2)
@@ -163,7 +166,11 @@ impl QuickBar {
 
 /// What the bar offers: the switches reached most often, plus the two that walk through
 /// a list. Each is the same action its menu item performs.
-fn buttons(s: &Settings) -> Vec<Button> {
+///
+/// "Live" is the exception: it is only there while the image is parked back in the
+/// history, and then it comes first. A way back matters most when it is needed, and a
+/// button that does nothing the rest of the time is taking room from one that does.
+fn buttons(s: &Settings, parked: bool) -> Vec<Button> {
     let switch = |short, long, flag: Flag| Button {
         rect: Rect::EMPTY,
         short,
@@ -171,7 +178,17 @@ fn buttons(s: &Settings) -> Vec<Button> {
         on: s.flag(flag),
         action: Action::Toggle(flag),
     };
-    vec![
+    let mut out = Vec::new();
+    if parked {
+        out.push(Button {
+            rect: Rect::EMPTY,
+            short: "LIVE",
+            long: "Live",
+            on: true,
+            action: Action::GoLive,
+        });
+    }
+    out.extend([
         switch("IMM", "Immersive", Flag::Immersive),
         switch("WAV", "Waveform", Flag::ShowWaveform),
         switch("GRD", "Grid", Flag::ShowGrid),
@@ -192,7 +209,8 @@ fn buttons(s: &Settings) -> Vec<Button> {
             action: Action::NextStyle,
         },
         switch("DECK", "Deck", Flag::ShowCentreDeck),
-    ]
+    ]);
+    out
 }
 
 /// Draws the bar. `under` is the button the pointer is over, if any.
@@ -310,8 +328,8 @@ mod tests {
         assert!(QuickBar::height_for(&s, 12.0) < tall);
 
         let bounds = Rect::new(0, 0, 1200, 30);
-        let wide = QuickBar::new(bounds, Rect::EMPTY, &settings(), 1.0, &mut measure);
-        let thin = QuickBar::new(bounds, Rect::EMPTY, &s, 1.0, &mut measure);
+        let wide = QuickBar::new(bounds, Rect::EMPTY, &settings(), false, 1.0, &mut measure);
+        let thin = QuickBar::new(bounds, Rect::EMPTY, &s, false, 1.0, &mut measure);
         let width = |b: &QuickBar| b.buttons.iter().map(|x| x.rect.w).sum::<i32>();
         assert!(width(&thin) < width(&wide));
     }
@@ -323,7 +341,7 @@ mod tests {
             ..settings()
         };
         let bounds = Rect::new(10, 4, 1200, 30);
-        let bar = QuickBar::new(bounds, Rect::EMPTY, &s, 1.0, &mut measure);
+        let bar = QuickBar::new(bounds, Rect::EMPTY, &s, false, 1.0, &mut measure);
         assert!(!bar.buttons.is_empty());
         for pair in bar.buttons.windows(2) {
             assert!(
@@ -346,7 +364,7 @@ mod tests {
         assert!(s.quick_bar_split);
         let bounds = Rect::new(0, 0, 1200, 30);
         let gutter = Rect::new(580, 0, 40, 30);
-        let bar = QuickBar::new(bounds, gutter, &s, 1.0, &mut measure);
+        let bar = QuickBar::new(bounds, gutter, &s, false, 1.0, &mut measure);
         assert!(!bar.buttons.is_empty());
         for b in &bar.buttons {
             assert!(
@@ -377,15 +395,39 @@ mod tests {
             Rect::new(0, 0, 1200, 30),
             Rect::EMPTY,
             &s,
+            false,
             1.0,
             &mut measure,
         );
-        let few = QuickBar::new(Rect::new(0, 0, 200, 30), Rect::EMPTY, &s, 1.0, &mut measure);
+        let few = QuickBar::new(
+            Rect::new(0, 0, 200, 30),
+            Rect::EMPTY,
+            &s,
+            false,
+            1.0,
+            &mut measure,
+        );
         assert!(few.buttons.len() < all.buttons.len());
         assert!(!few.buttons.is_empty());
         for b in &few.buttons {
             assert!(b.rect.right() <= 200);
         }
+    }
+
+    /// The way back only takes room on the bar while there is somewhere to come back
+    /// from, and then it takes the first place.
+    #[test]
+    fn the_live_button_is_there_only_while_the_image_is_parked() {
+        let bounds = Rect::new(0, 0, 1200, 30);
+        let s = settings();
+        let live = QuickBar::new(bounds, Rect::EMPTY, &s, true, 1.0, &mut measure);
+        assert_eq!(live.buttons[0].short, "LIVE");
+        assert_eq!(live.buttons[0].action, Action::GoLive);
+        assert!(live.buttons[0].on, "the way back reads as lit, not as off");
+
+        let normal = QuickBar::new(bounds, Rect::EMPTY, &s, false, 1.0, &mut measure);
+        assert!(normal.buttons.iter().all(|b| b.short != "LIVE"));
+        assert_eq!(live.buttons.len(), normal.buttons.len() + 1);
     }
 
     #[test]
@@ -397,6 +439,7 @@ mod tests {
             Rect::new(0, 0, 1200, 30),
             Rect::EMPTY,
             &s,
+            false,
             1.0,
             &mut measure,
         );
@@ -414,6 +457,7 @@ mod tests {
             Rect::new(0, 0, 1200, 30),
             Rect::EMPTY,
             &s,
+            false,
             1.0,
             &mut measure,
         );

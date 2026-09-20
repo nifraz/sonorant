@@ -823,6 +823,141 @@ fn a_moving_curve_leaves_a_trail() {
     assert_eq!(column(at_column(0) - 8), 0, "behind the trail");
 }
 
+/// Zooming and panning are nothing but what the pane asks the history for.
+///
+/// That is the claim the whole long-history view rests on, so it is worth pinning:
+/// fewer rows across the same pane stretches time, and holding the view at an older row
+/// shows what was there then. One loud row in a quiet history says exactly where the
+/// image is looking.
+#[test]
+fn what_a_pane_asks_for_is_where_the_image_looks() {
+    const WIDE: u32 = 64;
+    const PUSHED: usize = 200;
+    const LOUD: usize = 150;
+    let Some((device, queue, _, _)) = open_gpu() else {
+        eprintln!("no GPU here; skipping the history view");
+        return;
+    };
+    let mut history = HistoryStore::new(&device, GRID_BINS as u32, 256);
+    let quiet = vec![f16::from_f32(-96.0); GRID_BINS];
+    let loud = vec![f16::from_f32(-6.0); GRID_BINS];
+    for i in 0..PUSHED {
+        let levels = if i == LOUD { &loud } else { &quiet };
+        history.push(
+            &queue,
+            &RowIn {
+                index: i as u64,
+                frames: i as u64 * 800,
+                floor_db: -96.0,
+                ceiling_db: -6.0,
+                a: levels,
+                b: levels,
+            },
+        );
+    }
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("history view"),
+        size: wgpu::Extent3d {
+            width: WIDE,
+            height: 8,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut spectrogram = SpectrogramPass::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+    spectrogram.bind(&device, &history);
+    spectrogram.set_palette(&queue, &palette::build_lut(PaletteKind::Magma));
+
+    // The brightest column, or `None` when the loud row is nowhere in view.
+    let mut brightest = |visible_rows: f32, held: Option<u64>| {
+        let panes = [PaneView {
+            rect: [0.0, 0.0, WIDE as f32, 8.0],
+            channel: 0,
+            newest_left: true,
+            visible_rows,
+            frac: 0.0,
+            scale: FreqScale::Note,
+            fmin: 20.0,
+            fmax: 20000.0,
+            global_range: None,
+            smooth_time: false,
+        }];
+        spectrogram.prepare(&queue, &history, &panes, held);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("history view"),
+        });
+        {
+            let mut pass = encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("history view"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                })
+                .forget_lifetime();
+            spectrogram.draw(&mut pass, &panes);
+        }
+        let shot = Readback::record(&device, &mut encoder, &target);
+        queue.submit([encoder.finish()]);
+        let (w, _h, pixels) = shot.pixels(&device).expect("the frame reads back");
+        let row = 4 * w as usize * 4;
+        let (mut best, mut at) = (0u8, 0usize);
+        for x in 0..WIDE as usize {
+            let v = pixels[row + x * 4 + 1];
+            if v > best {
+                (best, at) = (v, x);
+            }
+        }
+        (best > 40).then_some(at)
+    };
+
+    // A row a pixel, live: the loud row is 49 rows old, so it lands about there.
+    let live = brightest(WIDE as f32, None).expect("the loud row is in view");
+    let age = PUSHED - 1 - LOUD;
+    assert!(
+        live.abs_diff(age) <= 2,
+        "the loud row is {age} old and drew at {live}"
+    );
+
+    // Zoomed in to two pixels a row, half the history fits and the loud row falls off
+    // the far edge.
+    assert_eq!(
+        brightest(WIDE as f32 / 2.0, None),
+        None,
+        "zooming in should have taken the loud row off the pane"
+    );
+
+    // Parked twenty rows past it, it comes back in near the newest edge.
+    let parked = brightest(WIDE as f32, Some((LOUD + 20) as u64)).expect("in view when parked");
+    assert!(
+        parked <= 21,
+        "parked twenty rows past it, it drew at {parked}"
+    );
+
+    // Zoomed in and parked together: the same row, twice as far across.
+    let both = brightest(WIDE as f32 / 2.0, Some((LOUD + 20) as u64)).expect("in view");
+    assert!(
+        both.abs_diff(parked * 2) <= 3,
+        "zoomed in it should be about twice as far across: {both} against {parked}"
+    );
+}
+
 #[test]
 fn the_scene_renders_as_it_did() {
     let Some((device, queue, adapter, software)) = open_gpu() else {

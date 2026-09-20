@@ -345,6 +345,14 @@ pub struct Settings {
     /// main lever against dense material rendering as haze.
     pub contrast: f64,
 
+    /// How far back the history reaches, in minutes, when there is room for it.
+    ///
+    /// A request rather than a promise: the store is sized from this and the scroll
+    /// speed, and held under a memory budget, because a row costs the same whatever the
+    /// speed and fifteen minutes at the fastest speed would ask for well over a
+    /// gigabyte. The app logs the reach it settled on.
+    pub history_minutes: i32,
+
     // Fullscreen and immersion.
     pub gutter_width: i32,
     pub show_waveform: bool,
@@ -444,6 +452,7 @@ impl Default for Settings {
             bar_size: 6,
             led_segment: 5,
             contrast: 0.25,
+            history_minutes: 5,
             gutter_width: 34,
             show_waveform: true,
             immersive: false,
@@ -692,6 +701,7 @@ named_enum! {
         ColourFollowDegrees = "ColourFollowDegrees",
         PhosphorMs = "PhosphorMs",
         PhosphorIntensity = "PhosphorIntensity",
+        HistoryMinutes = "HistoryMinutes",
     } default RowsPerSecond
 }
 
@@ -734,6 +744,7 @@ impl Number {
             // busy passage fills the square and stops saying anything.
             Number::PhosphorMs => (60.0, 2000.0, 20.0, true, "ms"),
             Number::PhosphorIntensity => (10.0, 300.0, 10.0, true, "%"),
+            Number::HistoryMinutes => (1.0, 15.0, 1.0, true, "min"),
         };
         Range {
             min,
@@ -900,6 +911,7 @@ impl Settings {
             Number::ColourFollowDegrees => f64::from(self.colour_follow_degrees),
             Number::PhosphorMs => f64::from(self.phosphor_ms),
             Number::PhosphorIntensity => f64::from(self.phosphor_intensity),
+            Number::HistoryMinutes => f64::from(self.history_minutes),
         }
     }
 
@@ -933,6 +945,7 @@ impl Settings {
             Number::ColourFollowDegrees => self.colour_follow_degrees = v as i32,
             Number::PhosphorMs => self.phosphor_ms = v as i32,
             Number::PhosphorIntensity => self.phosphor_intensity = v as i32,
+            Number::HistoryMinutes => self.history_minutes = v as i32,
         }
     }
 

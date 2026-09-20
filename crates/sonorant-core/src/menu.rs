@@ -238,6 +238,9 @@ pub enum Action {
     SetFollow(Follow),
     /// Hold the picture still while analysis carries on.
     Freeze,
+    /// Put the image back on now, at the plain zoom, after the wheel or a drag has
+    /// taken it back through the history.
+    GoLive,
     /// Hold the average spectrum as an amber reference, or drop the one held.
     Reference,
     Fullscreen,
@@ -266,6 +269,13 @@ pub enum Effect {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Session {
     pub frozen: bool,
+    /// Whether the image is parked somewhere in the history rather than on now, so the
+    /// menu and the quick bar can offer the way back. The app owns where it is looking
+    /// and sets this; nothing in here writes it.
+    pub parked: bool,
+    /// Set when the image should go back to now. The app takes it each frame, the way
+    /// it takes `command`, and puts the view and the zoom back itself.
+    pub go_live: bool,
     pub fullscreen: bool,
     /// Whether an amber reference spectrum is being held.
     pub reference: bool,
@@ -481,6 +491,12 @@ pub fn tree(ctx: &Context<'_>) -> Vec<Item> {
             session.frozen,
         )
         .key("Space"),
+        Item::command(
+            "Live",
+            "Put the image back on now, at the plain zoom",
+            Action::GoLive,
+        )
+        .key("End"),
         Item::check(
             "Reference curve",
             "Hold the average spectrum in amber to compare against, or drop it",
@@ -942,6 +958,14 @@ fn spectrogram(s: &Settings) -> Vec<Item> {
             |v| format!("{v:.0} px a row"),
             s,
         ),
+        sizes(
+            "History length",
+            "How far back the wheel and a drag can reach, as far as memory allows",
+            Number::HistoryMinutes,
+            &[1.0, 3.0, 5.0, 10.0, 15.0],
+            |v| format!("{v:.0} min"),
+            s,
+        ),
         flag(
             "Blend between rows",
             "Fade between rows rather than stepping, so slow scrolling stays smooth",
@@ -1387,6 +1411,13 @@ pub fn apply(action: &Action, s: &mut Settings, session: &mut Session) -> Option
             session.frozen = !session.frozen;
             touched = false;
         }
+        Action::GoLive => {
+            // Unfreezing is how the app is told to follow the newest row again, and
+            // `go_live` is what puts the zoom back with it.
+            session.frozen = false;
+            session.go_live = true;
+            touched = false;
+        }
         Action::Reference => {
             session.reference = !session.reference;
             touched = false;
@@ -1625,6 +1656,7 @@ mod tests {
         let ctx = context(&s, &session);
         for (key, want) in [
             ("Space", Action::Freeze),
+            ("End", Action::GoLive),
             ("A", Action::Reference),
             ("F11", Action::Fullscreen),
             ("I", Action::Toggle(Flag::Immersive)),

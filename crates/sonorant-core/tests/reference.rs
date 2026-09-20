@@ -229,6 +229,7 @@ fn every_setting_survives_a_save_and_load() {
         "smooth_time",
         "deck_phosphor",
         "curve_phosphor",
+        "history_minutes",
         "phosphor_ms",
         "phosphor_intensity",
     ];

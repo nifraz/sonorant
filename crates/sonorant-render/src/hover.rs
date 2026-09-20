@@ -42,12 +42,18 @@ pub struct Hover {
 /// What the pointer is over, or `None` when it is outside every pane.
 ///
 /// `at` is in physical pixels, as the panes are laid out.
+/// `behind` is how many seconds the pane's newest edge is behind now, which is zero
+/// while the image is live and grows as the wheel or a drag parks it back in the
+/// history. It is added to the age, so the readout and a double-click to seek both
+/// name the moment that is actually drawn there rather than one measured from an edge
+/// that has moved.
 pub fn locate(
     layout: &ScopeLayout,
     map: &FrequencyMap,
     at: (i32, i32),
     px_per_row: f64,
     rows_per_second: f64,
+    behind: f64,
 ) -> Option<Hover> {
     let (x, y) = at;
     let (pane_index, pane) = layout
@@ -67,7 +73,7 @@ pub fn locate(
     let freq = map.x_to_freq(bin as f64);
     let on_image = pane.spectro.contains(x, y);
     let age = if on_image {
-        pane.age_at(x, px_per_row).unwrap_or(0.0) / rows_per_second.max(1e-9)
+        pane.age_at(x, px_per_row).unwrap_or(0.0) / rows_per_second.max(1e-9) + behind
     } else {
         0.0
     };
@@ -333,12 +339,20 @@ mod tests {
             (pane.spectro.x + 5, pane.spectro.bottom() - 1),
             1.0,
             60.0,
+            0.0,
         )
         .expect("inside the pane");
         assert_eq!(bottom.bin, 0);
         assert!((bottom.freq - 20.0).abs() < 0.5, "{}", bottom.freq);
-        let top = locate(&l, &map, (pane.spectro.x + 5, pane.spectro.y), 1.0, 60.0)
-            .expect("inside the pane");
+        let top = locate(
+            &l,
+            &map,
+            (pane.spectro.x + 5, pane.spectro.y),
+            1.0,
+            60.0,
+            0.0,
+        )
+        .expect("inside the pane");
         assert_eq!(top.bin, pane.spectro.h as usize - 1);
         assert!(top.freq > 19000.0, "{}", top.freq);
     }
@@ -355,18 +369,29 @@ mod tests {
         } else {
             pane.spectro.right() - 1
         };
-        let now = locate(&l, &map, (newest, y), 1.0, 60.0).expect("inside");
+        let now = locate(&l, &map, (newest, y), 1.0, 60.0, 0.0).expect("inside");
         assert!(now.age.abs() < 1e-9);
         let back = if pane.curve_on_left {
             newest + 60
         } else {
             newest - 60
         };
-        let then = locate(&l, &map, (back, y), 1.0, 60.0).expect("inside");
+        let then = locate(&l, &map, (back, y), 1.0, 60.0, 0.0).expect("inside");
         assert!((then.age - 1.0).abs() < 1e-9, "{}", then.age);
         // Zooming in spreads the same second over twice the pixels.
-        let zoomed = locate(&l, &map, (back, y), 2.0, 60.0).expect("inside");
+        let zoomed = locate(&l, &map, (back, y), 2.0, 60.0, 0.0).expect("inside");
         assert!((zoomed.age - 0.5).abs() < 1e-9, "{}", zoomed.age);
+
+        // Parked ten seconds back, every column is ten seconds older than it reads from
+        // the edge, including the edge itself.
+        let parked = locate(&l, &map, (newest, y), 1.0, 60.0, 10.0).expect("inside");
+        assert!((parked.age - 10.0).abs() < 1e-9, "{}", parked.age);
+        let parked_back = locate(&l, &map, (back, y), 1.0, 60.0, 10.0).expect("inside");
+        assert!((parked_back.age - 11.0).abs() < 1e-9, "{}", parked_back.age);
+
+        // Off the image there is no moment to name, parked or not.
+        let off = locate(&l, &map, (pane.curve.x + 1, y), 1.0, 60.0, 10.0).expect("inside");
+        assert_eq!(off.age, 0.0);
     }
 
     #[test]
@@ -378,7 +403,7 @@ mod tests {
             pane.curve.x + pane.curve.w / 2,
             pane.curve.y + pane.curve.h / 2,
         );
-        let h = locate(&l, &map, at, 1.0, 60.0).expect("over the curve strip");
+        let h = locate(&l, &map, at, 1.0, 60.0, 0.0).expect("over the curve strip");
         assert!(!h.on_image);
         assert_eq!(h.age, 0.0);
         assert!(h.freq > 20.0);
@@ -388,12 +413,12 @@ mod tests {
     fn outside_the_panes_is_nothing() {
         let l = layout();
         let map = FrequencyMap::new(FreqScale::Note, 500, 20.0, 20000.0);
-        assert!(locate(&l, &map, (-5, 10), 1.0, 60.0).is_none());
-        assert!(locate(&l, &map, (600, 10_000), 1.0, 60.0).is_none());
+        assert!(locate(&l, &map, (-5, 10), 1.0, 60.0, 0.0).is_none());
+        assert!(locate(&l, &map, (600, 10_000), 1.0, 60.0, 0.0).is_none());
         // The gutter carries labels, not an image.
         let gutter = l.gutter;
         if !gutter.is_empty() {
-            assert!(locate(&l, &map, (gutter.x + gutter.w / 2, 300), 1.0, 60.0).is_none());
+            assert!(locate(&l, &map, (gutter.x + gutter.w / 2, 300), 1.0, 60.0, 0.0).is_none());
         }
     }
 
@@ -404,7 +429,7 @@ mod tests {
         let map = FrequencyMap::new(FreqScale::Note, pane.spectro.h as usize, 20.0, 20000.0);
         assert!(pane.lane.h > 0, "the default settings reserve a lane");
         let at = (pane.spectro.x + 5, pane.lane.y + pane.lane.h / 2);
-        assert!(locate(&l, &map, at, 1.0, 60.0).is_none());
+        assert!(locate(&l, &map, at, 1.0, 60.0, 0.0).is_none());
     }
 
     #[test]

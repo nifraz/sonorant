@@ -16,6 +16,7 @@ mod options;
 mod pacing;
 mod present;
 mod probe;
+mod timeview;
 mod ui;
 
 use std::io::Write;

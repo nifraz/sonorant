@@ -303,6 +303,7 @@ impl LegacySettings {
             // so it had nothing to persist and no key for any of this.
             deck_phosphor: s.deck_phosphor,
             curve_phosphor: s.curve_phosphor,
+            history_minutes: s.history_minutes,
             phosphor_ms: s.phosphor_ms,
             phosphor_intensity: s.phosphor_intensity,
         };

@@ -89,14 +89,27 @@ impl Shell {
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
                 area.rect = ui.max_rect();
-                let response =
-                    ui.interact(area.rect, egui::Id::new("visuals"), egui::Sense::click());
+                let response = ui.interact(
+                    area.rect,
+                    egui::Id::new("visuals"),
+                    egui::Sense::click_and_drag(),
+                );
                 area.hovered = response
                     .hovered()
                     .then(|| ui.ctx().pointer_latest_pos())
                     .flatten();
                 area.double_clicked = response.double_clicked();
-                area.clicked = response.clicked();
+                // A drag over the image pans the history, so only the distance along
+                // the time axis is of any use here.
+                area.dragged = response.dragged().then(|| response.drag_delta().x);
+                // Smoothed rather than raw: the wheel drives a zoom, and a zoom that
+                // jumps a notch at a time is harder to aim than one that glides.
+                if response.hovered() {
+                    area.scrolled = ui.ctx().input(|i| i.smooth_scroll_delta.y);
+                }
+                // A drag ends in a click as far as egui is concerned, and a pan is not
+                // a press of whatever button happens to be under the pointer.
+                area.clicked = response.clicked() && area.dragged.is_none();
                 area.menu_open = response.context_menu_opened();
                 response.context_menu(|ui| {
                     let items = menu::tree(&Context {
@@ -249,6 +262,11 @@ pub struct Area {
     pub double_clicked: bool,
     /// Whether it was clicked at all, for the quick bar's buttons.
     pub clicked: bool,
+    /// How far a drag moved along the time axis this frame, in points, or `None` when
+    /// nothing is being dragged.
+    pub dragged: Option<f32>,
+    /// How far the wheel turned over the image this frame, in points.
+    pub scrolled: f32,
     /// Whether the right-click menu is open, so the chrome doesn't fade under it.
     pub menu_open: bool,
 }
@@ -260,6 +278,8 @@ impl Default for Area {
             hovered: None,
             double_clicked: false,
             clicked: false,
+            dragged: None,
+            scrolled: 0.0,
             menu_open: false,
         }
     }
@@ -325,6 +345,7 @@ pub fn key_name(key: &winit::keyboard::Key) -> Option<String> {
     match key {
         Key::Named(NamedKey::Space) => Some("Space".to_owned()),
         Key::Named(NamedKey::Escape) => Some("Esc".to_owned()),
+        Key::Named(NamedKey::End) => Some("End".to_owned()),
         Key::Named(NamedKey::F1) => Some("F1".to_owned()),
         Key::Named(NamedKey::F11) => Some("F11".to_owned()),
         Key::Character(c) if c.len() == 1 && c.is_ascii() => Some(c.to_uppercase()),
