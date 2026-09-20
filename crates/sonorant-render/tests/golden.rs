@@ -11,6 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
+use half::f16;
 use sonorant_core::dsp::{FreqScale, FrequencyMap, LoudnessReadings};
 use sonorant_core::engine::{GRID_BINS, GRID_FMAX, GRID_FMIN};
 use sonorant_core::palette::{self, PaletteKind};
@@ -26,7 +27,6 @@ use sonorant_render::overlay::{Face, Layer, Overlay};
 use sonorant_render::readback::{Readback, write_png};
 use sonorant_render::spectrogram::{PaneView, SpectrogramPass};
 use sonorant_render::{axes, deck};
-use half::f16;
 
 const WIDTH: u32 = 960;
 const HEIGHT: u32 = 540;

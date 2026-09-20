@@ -1,5 +1,6 @@
 //! Sonorant's model and engine against the values Nostalgia+ produced.
 
+use serde_json::json;
 use sonorant_core::dsp::{
     AnalysisQuality, BandAggregate, ChannelPairMode, CurveInterpolation, FilteringAmount,
     FreqScale, WindowType,
@@ -9,7 +10,6 @@ use sonorant_core::legacy::{self, LegacySettings};
 use sonorant_core::palette::{self, PaletteKind};
 use sonorant_core::settings::{Argb, Preset, Settings, ThemeSlot, sanitise_name};
 use sonorant_testdata::{Mismatches, Value, ValueExt, floats, json, root, signal};
-use serde_json::json;
 
 fn hex(c: palette::Rgb) -> String {
     format!("#{:08X}", c.to_argb())

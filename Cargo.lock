@@ -1053,86 +1053,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
-name = "sonorant"
-version = "0.1.0"
-dependencies = [
- "sonorant-core",
- "sonorant-platform",
- "sonorant-render",
- "egui",
- "egui-wgpu",
- "egui-winit",
- "env_logger",
- "log",
- "pollster",
- "wgpu",
- "windows",
- "winit",
-]
-
-[[package]]
-name = "sonorant-core"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "sonorant-dsp",
- "sonorant-testdata",
- "half",
- "log",
- "rtrb",
- "serde",
- "serde_json",
- "toml",
- "triple_buffer",
-]
-
-[[package]]
-name = "sonorant-dsp"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "sonorant-testdata",
- "rustfft",
- "serde",
-]
-
-[[package]]
-name = "sonorant-platform"
-version = "0.1.0"
-dependencies = [
- "sonorant-core",
- "env_logger",
- "log",
- "pipewire",
- "windows",
- "windows-core",
- "zbus",
-]
-
-[[package]]
-name = "sonorant-render"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "sonorant-core",
- "sonorant-testdata",
- "glyphon",
- "half",
- "log",
- "png",
- "pollster",
- "wgpu",
- "zune-jpeg",
-]
-
-[[package]]
-name = "sonorant-testdata"
-version = "0.1.0"
-dependencies = [
- "serde_json",
-]
-
-[[package]]
 name = "ecolor"
 version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3525,6 +3445,86 @@ name = "smol_str"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4aaa7368fcf4852a4c2dd92df0cace6a71f2091ca0a23391ce7f3a31833f1523"
+
+[[package]]
+name = "sonorant"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "egui-wgpu",
+ "egui-winit",
+ "env_logger",
+ "log",
+ "pollster",
+ "sonorant-core",
+ "sonorant-platform",
+ "sonorant-render",
+ "wgpu",
+ "windows",
+ "winit",
+]
+
+[[package]]
+name = "sonorant-core"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "half",
+ "log",
+ "rtrb",
+ "serde",
+ "serde_json",
+ "sonorant-dsp",
+ "sonorant-testdata",
+ "toml",
+ "triple_buffer",
+]
+
+[[package]]
+name = "sonorant-dsp"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "rustfft",
+ "serde",
+ "sonorant-testdata",
+]
+
+[[package]]
+name = "sonorant-platform"
+version = "0.1.0"
+dependencies = [
+ "env_logger",
+ "log",
+ "pipewire",
+ "sonorant-core",
+ "windows",
+ "windows-core",
+ "zbus",
+]
+
+[[package]]
+name = "sonorant-render"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "glyphon",
+ "half",
+ "log",
+ "png",
+ "pollster",
+ "sonorant-core",
+ "sonorant-testdata",
+ "wgpu",
+ "zune-jpeg",
+]
+
+[[package]]
+name = "sonorant-testdata"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "spirv"

@@ -15,11 +15,11 @@ use std::sync::mpsc::Sender;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use sonorant_core::runtime::AudioInput;
-use sonorant_core::source::{AudioSource, SourceEvent, SourceStatus, StreamFormat, to_stereo};
 use pipewire as pw;
 use pw::properties::properties;
 use pw::spa;
+use sonorant_core::runtime::AudioInput;
+use sonorant_core::source::{AudioSource, SourceEvent, SourceStatus, StreamFormat, to_stereo};
 use spa::param::format::{MediaSubtype, MediaType};
 use spa::param::format_utils;
 use spa::pod::Pod;
