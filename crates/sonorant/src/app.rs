@@ -34,6 +34,9 @@ const STATUS_EVERY: Duration = Duration::from_millis(250);
 const COLOUR_BAR_WIDTH: i32 = 40;
 /// A frame interval this long is logged with where the time went.
 const STALL: Duration = Duration::from_millis(100);
+/// How long a capture target that could not be opened is left alone before it is
+/// tried again.
+const CAPTURE_RETRY: Duration = Duration::from_secs(5);
 
 /// Events sent to the loop from other threads.
 #[derive(Debug)]
@@ -107,8 +110,9 @@ struct Running {
     /// Whether capture may be re-pointed at the player. A `--wav` or `--app` run is
     /// the user saying exactly what to capture, so it is left alone.
     capture_follows: bool,
-    /// A target that could not be opened, so it isn't retried every frame.
-    capture_failed: Option<Input>,
+    /// A target that could not be opened, and when, so it isn't retried every frame
+    /// and isn't given up on for good either.
+    capture_failed: Option<(Input, Instant)>,
     columns: usize,
     held: Option<u64>,
     pacing: FramePacing,
@@ -1040,7 +1044,13 @@ impl Running {
             self.capture_failed = None;
             return;
         }
-        if self.capture_failed.as_ref() == Some(&want) {
+        // A process loopback can fail because the app hasn't opened its stream yet,
+        // which is a moment's difference, so a failure is worth trying again - just
+        // not sixty times a second.
+        if let Some((failed, at)) = &self.capture_failed
+            && *failed == want
+            && at.elapsed() < CAPTURE_RETRY
+        {
             return;
         }
         let Some(audio) = &mut self.audio else { return };
@@ -1052,7 +1062,7 @@ impl Running {
             }
             Err(e) => {
                 log::warn!("cannot capture {want:?}: {e}");
-                self.capture_failed = Some(want);
+                self.capture_failed = Some((want, Instant::now()));
             }
         }
     }

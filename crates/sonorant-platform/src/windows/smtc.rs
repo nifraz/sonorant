@@ -212,24 +212,10 @@ fn run(
             }
         }
         // Whatever else queued up behind that is the same refresh.
+        let mut stopping = false;
         for msg in rx.try_iter() {
             match msg {
-                Msg::Stop => {
-                    if let Some(w) = watched.take() {
-                        w.unsubscribe();
-                    }
-                    for (which, token) in manager_tokens {
-                        let _ = match which {
-                            0 => manager.RemoveSessionsChanged(token),
-                            _ => manager.RemoveCurrentSessionChanged(token),
-                        };
-                    }
-                    if com {
-                        // SAFETY: balances the successful CoInitializeEx above.
-                        unsafe { CoUninitialize() };
-                    }
-                    return;
-                }
+                Msg::Stop => stopping = true,
                 Msg::Follow(f) => follow = f,
                 Msg::Transport(command) => {
                     if let Some(s) = &session {
@@ -238,6 +224,9 @@ fn run(
                 }
                 Msg::Refresh => {}
             }
+        }
+        if stopping {
+            break;
         }
     }
 
