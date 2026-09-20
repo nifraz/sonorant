@@ -256,6 +256,10 @@ pub struct Settings {
     pub average_seconds: f64,
     /// Spectrogram rows per second of audio. Nostalgia+ tied this to its frame rate.
     pub rows_per_second: f64,
+    /// Screen pixels each history row is drawn across: the time zoom.
+    pub px_per_row: i32,
+    /// Blend between rows rather than stepping, so slow scrolling doesn't stair-step.
+    pub smooth_time: bool,
 
     // Per-channel panes, shared by every view.
     pub pair_mode: ChannelPairMode,
@@ -373,6 +377,8 @@ impl Default for Settings {
             peak_decay_db_per_sec: 14.0,
             average_seconds: 1.2,
             rows_per_second: 60.0,
+            px_per_row: 1,
+            smooth_time: false,
             pair_mode: ChannelPairMode::LeftRight,
             style: CurveStyle::Line,
             interp: CurveInterpolation::LinearSmooth,
@@ -585,6 +591,327 @@ impl Settings {
     }
 }
 
+named_enum! {
+    /// Every switch in [`Settings`], so the menu model, the keys and the quick bar can
+    /// name one without a field of their own for each.
+    Flag {
+        ShowGrid = "ShowGrid",
+        ShowLabels = "ShowLabels",
+        ShowColourBar = "ShowColourBar",
+        ShowHud = "ShowHud",
+        ShowStatus = "ShowStatus",
+        AdaptiveRange = "AdaptiveRange",
+        SmoothTime = "SmoothTime",
+        ShowMax = "ShowMax",
+        ShowMin = "ShowMin",
+        ShowAvg = "ShowAvg",
+        SolidFill = "SolidFill",
+        CurveOnLeft = "CurveOnLeft",
+        MirrorLeftPane = "MirrorLeftPane",
+        ShowDbScale = "ShowDbScale",
+        ShowTimeMarks = "ShowTimeMarks",
+        ShowSemitones = "ShowSemitones",
+        ShowOuterLabels = "ShowOuterLabels",
+        ShowAxisLabels = "ShowAxisLabels",
+        SyncHover = "SyncHover",
+        ShowHoverPin = "ShowHoverPin",
+        ShowHarmonics = "ShowHarmonics",
+        SeekOnImageClick = "SeekOnImageClick",
+        ShowOsd = "ShowOsd",
+        ShowQuickButtons = "ShowQuickButtons",
+        QuickBarCompact = "QuickBarCompact",
+        QuickBarSplit = "QuickBarSplit",
+        ReserveScaleSpace = "ReserveScaleSpace",
+        ShowScaleUnits = "ShowScaleUnits",
+        ShowCentreDeck = "ShowCentreDeck",
+        DeckGoniometer = "DeckGoniometer",
+        DeckTransport = "DeckTransport",
+        DeckArtwork = "DeckArtwork",
+        DeckTrackInfo = "DeckTrackInfo",
+        DeckCorrelation = "DeckCorrelation",
+        DeckBalance = "DeckBalance",
+        DeckLufsM = "DeckLufsM",
+        DeckLufsS = "DeckLufsS",
+        DeckTruePeak = "DeckTruePeak",
+        DeckCrest = "DeckCrest",
+        DeckLufsI = "DeckLufsI",
+        DeckLra = "DeckLra",
+        DeckOvers = "DeckOvers",
+        DeckBpm = "DeckBpm",
+        DeckBrightness = "DeckBrightness",
+        ShowWaveform = "ShowWaveform",
+        Immersive = "Immersive",
+        Glow = "Glow",
+        AutoHide = "AutoHide",
+        Backdrop = "Backdrop",
+        BeatReactive = "BeatReactive",
+        ColourFollows = "ColourFollows",
+        Cinematic = "Cinematic",
+    } default ShowGrid
+}
+
+named_enum! {
+    /// Every setting that is a number rather than a switch or a choice.
+    Number {
+        Fmin = "Fmin",
+        Fmax = "Fmax",
+        Tilt = "Tilt",
+        FloorDb = "FloorDb",
+        CeilingDb = "CeilingDb",
+        Contrast = "Contrast",
+        AttackMs = "AttackMs",
+        ReleaseMs = "ReleaseMs",
+        PeakDecay = "PeakDecay",
+        AverageSeconds = "AverageSeconds",
+        RowsPerSecond = "RowsPerSecond",
+        PxPerRow = "PxPerRow",
+        CurveWidthPct = "CurveWidthPct",
+        WaveHeightPct = "WaveHeightPct",
+        DeckHeightPx = "DeckHeightPx",
+        GutterWidth = "GutterWidth",
+        BarSize = "BarSize",
+        LedSegment = "LedSegment",
+        LabelFontSize = "LabelFontSize",
+        BackdropPct = "BackdropPct",
+        ColourFollowDegrees = "ColourFollowDegrees",
+    } default RowsPerSecond
+}
+
+/// What a [`Number`] accepts: the ends of its range, how far one step moves it, whether
+/// it is a whole number, and what it is measured in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Range {
+    pub min: f64,
+    pub max: f64,
+    pub step: f64,
+    pub whole: bool,
+    pub unit: &'static str,
+}
+
+impl Number {
+    pub fn range(self) -> Range {
+        let (min, max, step, whole, unit) = match self {
+            Number::Fmin => (0.0, 1000.0, 5.0, false, "Hz"),
+            Number::Fmax => (1000.0, 24000.0, 500.0, false, "Hz"),
+            Number::Tilt => (0.0, 6.0, 0.5, false, "dB/oct"),
+            Number::FloorDb => (-140.0, -20.0, 5.0, false, "dB"),
+            Number::CeilingDb => (-60.0, 0.0, 5.0, false, "dB"),
+            Number::Contrast => (0.0, 0.95, 0.05, false, ""),
+            Number::AttackMs => (1.0, 400.0, 5.0, false, "ms"),
+            Number::ReleaseMs => (20.0, 2000.0, 20.0, false, "ms"),
+            Number::PeakDecay => (0.0, 60.0, 2.0, false, "dB/s"),
+            Number::AverageSeconds => (0.1, 10.0, 0.1, false, "s"),
+            Number::RowsPerSecond => (1.0, 240.0, 5.0, false, "rows/s"),
+            Number::PxPerRow => (1.0, 8.0, 1.0, true, "px"),
+            Number::CurveWidthPct => (0.0, 60.0, 2.0, true, "%"),
+            Number::WaveHeightPct => (0.0, 40.0, 1.0, true, "%"),
+            Number::DeckHeightPx => (60.0, 400.0, 10.0, true, "px"),
+            Number::GutterWidth => (0.0, 90.0, 2.0, true, "px"),
+            Number::BarSize => (1.0, 24.0, 1.0, true, "px"),
+            Number::LedSegment => (2.0, 20.0, 1.0, true, "px"),
+            Number::LabelFontSize => (5.0, 20.0, 0.5, false, "pt"),
+            Number::BackdropPct => (0.0, 60.0, 2.0, true, "%"),
+            Number::ColourFollowDegrees => (0.0, 180.0, 5.0, true, "deg"),
+        };
+        Range {
+            min,
+            max,
+            step,
+            whole,
+            unit,
+        }
+    }
+}
+
+impl Settings {
+    pub fn flag(&self, flag: Flag) -> bool {
+        match flag {
+            Flag::ShowGrid => self.show_grid,
+            Flag::ShowLabels => self.show_labels,
+            Flag::ShowColourBar => self.show_color_bar,
+            Flag::ShowHud => self.show_hud,
+            Flag::ShowStatus => self.show_status,
+            Flag::AdaptiveRange => self.adaptive_range,
+            Flag::SmoothTime => self.smooth_time,
+            Flag::ShowMax => self.show_max,
+            Flag::ShowMin => self.show_min,
+            Flag::ShowAvg => self.show_avg,
+            Flag::SolidFill => self.solid_fill,
+            Flag::CurveOnLeft => self.curve_on_left,
+            Flag::MirrorLeftPane => self.mirror_left_pane,
+            Flag::ShowDbScale => self.show_db_scale,
+            Flag::ShowTimeMarks => self.show_time_marks,
+            Flag::ShowSemitones => self.show_semitones,
+            Flag::ShowOuterLabels => self.show_outer_labels,
+            Flag::ShowAxisLabels => self.show_axis_labels,
+            Flag::SyncHover => self.sync_hover,
+            Flag::ShowHoverPin => self.show_hover_pin,
+            Flag::ShowHarmonics => self.show_harmonics,
+            Flag::SeekOnImageClick => self.seek_on_image_click,
+            Flag::ShowOsd => self.show_osd,
+            Flag::ShowQuickButtons => self.show_quick_buttons,
+            Flag::QuickBarCompact => self.quick_bar_compact,
+            Flag::QuickBarSplit => self.quick_bar_split,
+            Flag::ReserveScaleSpace => self.reserve_scale_space,
+            Flag::ShowScaleUnits => self.show_scale_units,
+            Flag::ShowCentreDeck => self.show_center_deck,
+            Flag::DeckGoniometer => self.deck_show_goniometer,
+            Flag::DeckTransport => self.deck_show_transport,
+            Flag::DeckArtwork => self.deck_show_artwork,
+            Flag::DeckTrackInfo => self.deck_show_track_info,
+            Flag::DeckCorrelation => self.deck_show_correlation,
+            Flag::DeckBalance => self.deck_show_balance,
+            Flag::DeckLufsM => self.deck_show_lufs_m,
+            Flag::DeckLufsS => self.deck_show_lufs_s,
+            Flag::DeckTruePeak => self.deck_show_true_peak,
+            Flag::DeckCrest => self.deck_show_crest,
+            Flag::DeckLufsI => self.deck_show_lufs_i,
+            Flag::DeckLra => self.deck_show_lra,
+            Flag::DeckOvers => self.deck_show_overs,
+            Flag::DeckBpm => self.deck_show_bpm,
+            Flag::DeckBrightness => self.deck_show_brightness,
+            Flag::ShowWaveform => self.show_waveform,
+            Flag::Immersive => self.immersive,
+            Flag::Glow => self.glow,
+            Flag::AutoHide => self.auto_hide,
+            Flag::Backdrop => self.imm_backdrop,
+            Flag::BeatReactive => self.imm_beat_reactive,
+            Flag::ColourFollows => self.imm_colour_follows,
+            Flag::Cinematic => self.imm_cinematic,
+        }
+    }
+
+    pub fn set_flag(&mut self, flag: Flag, on: bool) {
+        *self.flag_at(flag) = on;
+    }
+
+    /// Flips `flag` and says what it is now.
+    pub fn toggle(&mut self, flag: Flag) -> bool {
+        let at = self.flag_at(flag);
+        *at = !*at;
+        *at
+    }
+
+    fn flag_at(&mut self, flag: Flag) -> &mut bool {
+        match flag {
+            Flag::ShowGrid => &mut self.show_grid,
+            Flag::ShowLabels => &mut self.show_labels,
+            Flag::ShowColourBar => &mut self.show_color_bar,
+            Flag::ShowHud => &mut self.show_hud,
+            Flag::ShowStatus => &mut self.show_status,
+            Flag::AdaptiveRange => &mut self.adaptive_range,
+            Flag::SmoothTime => &mut self.smooth_time,
+            Flag::ShowMax => &mut self.show_max,
+            Flag::ShowMin => &mut self.show_min,
+            Flag::ShowAvg => &mut self.show_avg,
+            Flag::SolidFill => &mut self.solid_fill,
+            Flag::CurveOnLeft => &mut self.curve_on_left,
+            Flag::MirrorLeftPane => &mut self.mirror_left_pane,
+            Flag::ShowDbScale => &mut self.show_db_scale,
+            Flag::ShowTimeMarks => &mut self.show_time_marks,
+            Flag::ShowSemitones => &mut self.show_semitones,
+            Flag::ShowOuterLabels => &mut self.show_outer_labels,
+            Flag::ShowAxisLabels => &mut self.show_axis_labels,
+            Flag::SyncHover => &mut self.sync_hover,
+            Flag::ShowHoverPin => &mut self.show_hover_pin,
+            Flag::ShowHarmonics => &mut self.show_harmonics,
+            Flag::SeekOnImageClick => &mut self.seek_on_image_click,
+            Flag::ShowOsd => &mut self.show_osd,
+            Flag::ShowQuickButtons => &mut self.show_quick_buttons,
+            Flag::QuickBarCompact => &mut self.quick_bar_compact,
+            Flag::QuickBarSplit => &mut self.quick_bar_split,
+            Flag::ReserveScaleSpace => &mut self.reserve_scale_space,
+            Flag::ShowScaleUnits => &mut self.show_scale_units,
+            Flag::ShowCentreDeck => &mut self.show_center_deck,
+            Flag::DeckGoniometer => &mut self.deck_show_goniometer,
+            Flag::DeckTransport => &mut self.deck_show_transport,
+            Flag::DeckArtwork => &mut self.deck_show_artwork,
+            Flag::DeckTrackInfo => &mut self.deck_show_track_info,
+            Flag::DeckCorrelation => &mut self.deck_show_correlation,
+            Flag::DeckBalance => &mut self.deck_show_balance,
+            Flag::DeckLufsM => &mut self.deck_show_lufs_m,
+            Flag::DeckLufsS => &mut self.deck_show_lufs_s,
+            Flag::DeckTruePeak => &mut self.deck_show_true_peak,
+            Flag::DeckCrest => &mut self.deck_show_crest,
+            Flag::DeckLufsI => &mut self.deck_show_lufs_i,
+            Flag::DeckLra => &mut self.deck_show_lra,
+            Flag::DeckOvers => &mut self.deck_show_overs,
+            Flag::DeckBpm => &mut self.deck_show_bpm,
+            Flag::DeckBrightness => &mut self.deck_show_brightness,
+            Flag::ShowWaveform => &mut self.show_waveform,
+            Flag::Immersive => &mut self.immersive,
+            Flag::Glow => &mut self.glow,
+            Flag::AutoHide => &mut self.auto_hide,
+            Flag::Backdrop => &mut self.imm_backdrop,
+            Flag::BeatReactive => &mut self.imm_beat_reactive,
+            Flag::ColourFollows => &mut self.imm_colour_follows,
+            Flag::Cinematic => &mut self.imm_cinematic,
+        }
+    }
+
+    pub fn number(&self, n: Number) -> f64 {
+        match n {
+            Number::Fmin => self.fmin,
+            Number::Fmax => self.fmax,
+            Number::Tilt => self.tilt_db_per_octave,
+            Number::FloorDb => self.floor_db,
+            Number::CeilingDb => self.ceiling_db,
+            Number::Contrast => self.contrast,
+            Number::AttackMs => self.attack_ms,
+            Number::ReleaseMs => self.release_ms,
+            Number::PeakDecay => self.peak_decay_db_per_sec,
+            Number::AverageSeconds => self.average_seconds,
+            Number::RowsPerSecond => self.rows_per_second,
+            Number::PxPerRow => f64::from(self.px_per_row),
+            Number::CurveWidthPct => f64::from(self.curve_width_pct),
+            Number::WaveHeightPct => f64::from(self.wave_height_pct),
+            Number::DeckHeightPx => f64::from(self.deck_height_px),
+            Number::GutterWidth => f64::from(self.gutter_width),
+            Number::BarSize => f64::from(self.bar_size),
+            Number::LedSegment => f64::from(self.led_segment),
+            Number::LabelFontSize => f64::from(self.label_font_size),
+            Number::BackdropPct => f64::from(self.backdrop_pct),
+            Number::ColourFollowDegrees => f64::from(self.colour_follow_degrees),
+        }
+    }
+
+    /// Sets `n`, held inside its range and rounded where it is a whole number.
+    pub fn set_number(&mut self, n: Number, value: f64) {
+        let r = n.range();
+        let v = if value.is_finite() { value } else { r.min };
+        let v = v.clamp(r.min, r.max);
+        let v = if r.whole { v.round() } else { v };
+        match n {
+            Number::Fmin => self.fmin = v,
+            Number::Fmax => self.fmax = v,
+            Number::Tilt => self.tilt_db_per_octave = v,
+            Number::FloorDb => self.floor_db = v,
+            Number::CeilingDb => self.ceiling_db = v,
+            Number::Contrast => self.contrast = v,
+            Number::AttackMs => self.attack_ms = v,
+            Number::ReleaseMs => self.release_ms = v,
+            Number::PeakDecay => self.peak_decay_db_per_sec = v,
+            Number::AverageSeconds => self.average_seconds = v,
+            Number::RowsPerSecond => self.rows_per_second = v,
+            Number::PxPerRow => self.px_per_row = v as i32,
+            Number::CurveWidthPct => self.curve_width_pct = v as i32,
+            Number::WaveHeightPct => self.wave_height_pct = v as i32,
+            Number::DeckHeightPx => self.deck_height_px = v as i32,
+            Number::GutterWidth => self.gutter_width = v as i32,
+            Number::BarSize => self.bar_size = v as i32,
+            Number::LedSegment => self.led_segment = v as i32,
+            Number::LabelFontSize => self.label_font_size = v as f32,
+            Number::BackdropPct => self.backdrop_pct = v as i32,
+            Number::ColourFollowDegrees => self.colour_follow_degrees = v as i32,
+        }
+    }
+
+    /// Moves `n` by `steps` of its own step size.
+    pub fn step_number(&mut self, n: Number, steps: f64) {
+        let r = n.range();
+        self.set_number(n, self.number(n) + steps * r.step);
+    }
+}
 /// Keeps a name to letters, digits, spaces, hyphens and underscores, so it can be a
 /// file name on any system. Trimmed at both ends.
 pub fn sanitise_name(name: &str) -> String {

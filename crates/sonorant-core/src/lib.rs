@@ -4,6 +4,7 @@
 pub mod engine;
 pub mod legacy;
 pub mod media;
+pub mod menu;
 pub mod palette;
 pub mod runtime;
 pub mod settings;

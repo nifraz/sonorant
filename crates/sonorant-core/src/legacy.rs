@@ -296,6 +296,9 @@ impl LegacySettings {
             // Carried over from the two legacy fields below by `into_settings`.
             frame_cap: s.frame_cap,
             rows_per_second: s.rows_per_second,
+            // New here: Nostalgia+ drew one row a frame, with no zoom and no blending.
+            px_per_row: s.px_per_row,
+            smooth_time: s.smooth_time,
         };
         LegacySettings {
             settings,
