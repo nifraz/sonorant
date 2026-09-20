@@ -41,7 +41,7 @@ possible, and follows whatever player is running instead of living inside one.
 | Linux capture | Native PipeWire from day one | Decided |
 | Frame timing | Display refresh rate. Scrolling follows audio time | Decided |
 | v1 scope | Parity, plus phosphor scope and bloom, zoomable long history, 3D waterfall and beat-reactive backdrop | Decided |
-| Repository | New `sonorant` repo. The Nostalgia+ repo stays as the plugin's home | Decided |
+| Repository | New [`sonorant`](https://github.com/nifraz/sonorant) repo. The Nostalgia+ repo stays as the plugin's home | Decided |
 | Licence | GPL-3.0-or-later | Decided |
 | Text stack | cosmic-text and glyphon for the deck and axis labels; egui's own text for menus and help | Decided |
 | Font | IBM Plex Sans, with IBM Plex Mono for readouts (SIL Open Font License) | Decided |
@@ -57,19 +57,19 @@ possible, and follows whatever player is running instead of living inside one.
 
 ## Progress
 
-*As of 2026-09-20, the end of the fourth working session.* Phases 0 to 5 are written,
-apart from the checks that need other machines, a real player or CI. Every piece Phase 3
-deferred has now arrived: the backdrop in Phase 4, and the harmonic ruler and the quick
-bar here. The three targets missed in the first session are met or explained (see
-[Measurements](#measurements)). The next session starts Phase 6 at [Next](#next).
+*As of 2026-09-20.* Phases 0 to 5 are written, apart from the checks that need other
+machines, a real player or CI. Every piece Phase 3 deferred has now arrived: the
+backdrop in Phase 4, and the harmonic ruler and the quick bar here. The three targets
+missed at the start are met or explained (see [Measurements](#measurements)). Phase 6
+begins at [Next](#next).
 
 **Phase 0 (repository, CI, skeleton): done, except clean frame pacing and CI**
 
 - [x] The `sonorant` repo, with the plan as its first commit. Five crates plus
   `sonorant-testdata`, Rust 1.98.1 pinned, edition 2024, GPL-3.0-or-later.
 - [x] The CI workflow: fmt, clippy with warnings as errors, tests on `ubuntu-24.04`,
-  `ubuntu-24.04-arm` and `windows-latest`, and cargo-deny. Written and clean locally, but
-  it hasn't run yet: the GitHub repo doesn't exist yet.
+  `ubuntu-24.04-arm` and `windows-latest`, and cargo-deny. Clean locally; it first runs
+  on the push to GitHub.
 - [x] The skeleton (winit, wgpu and egui, a test menu, frame-pacing measurement with
   `--pacing-seconds` and `--pacing-log`). It has since grown into the live app below.
 - [x] Reference vectors: `build\export.cmd` in Nostalgia+ (branch
@@ -317,24 +317,25 @@ about one run in three on WARP, always on the same single column of pixels: x=47
 the right pane's curve strip begins and its viewport's left edge falls. The same test
 binary passes and fails across runs with the layout identical every time (gutter
 443..477, the strip's base column at 477), so it is a rasterisation edge case at the
-viewport boundary rather than a change in what is drawn. It predates this session — the
-test was run at HEAD to check. Worth fixing before CI, where a one-in-three flake is
-worse than here: either draw the strip without a viewport, using a scissor or the rect
-in the shader, or widen the golden's tolerance for a single boundary column. Not fixed
-here because it is Phase 3's renderer and wants a careful look rather than a guess.
+viewport boundary rather than a change in what is drawn. It is older than the work that
+found it: the test was run at HEAD to check. Worth fixing before CI, where a
+one-in-three flake is worse than here: either draw the strip without a viewport, using a
+scissor or the rect in the shader, or widen the golden's tolerance for a single boundary
+column. Not fixed here because it is Phase 3's renderer and wants a careful look rather
+than a guess.
 
-Before that, or alongside it, the things that need a machine this one isn't: push to
-GitHub and get CI green, which is the first PipeWire build and the first lavapipe
-golden; then the player checks in Phase 4 and the scaling checks above. Carried over:
-the first frame's 100-odd ms of lazy initialisation (logged as a stall) could move into
-start-up, and swapping the capture source happens on the frame loop's thread, so
-following a player costs a frame. Two new ones: the settings are only written on exit,
-so a crash loses what the menu changed, and the history is sized for five minutes at the
+Before that, or alongside it, the things that need a machine this one isn't: the
+first CI run, which is the first PipeWire build and the first lavapipe golden; then
+the player checks in Phase 4 and the scaling checks above. Carried over: the first
+frame's 100-odd ms of lazy initialisation (logged as a stall) could move into start-up,
+and swapping the capture source happens on the frame loop's thread, so following
+a player costs a frame. Two new ones: the settings are only written on exit, so a
+crash loses what the menu changed, and the history is sized for five minutes at the
 scroll speed it started with, so changing the speed changes how far back it reaches.
 
 ### Measurements
 
-| What | Session 1 | Now | Target |
+| What | At the start | Now | Target |
 |---|---|---|---|
 | Whole hop at 120 hops per second, Balanced (engine, per hop) | 1.18 ms | **Met:** median 0.37 ms, mean 0.48 ms, minimum 0.20 ms | Under 0.5 ms |
 | Display projection, 1,080 columns / history grid, 2,048 bins | 0.32 / 0.59 ms | 0.03-0.07 / 0.06-0.14 ms | |
@@ -347,14 +348,14 @@ The GPU figures are from the 840M at 1920x1080, which is what this machine's scr
 allows; 2560x1440 has to be timed offscreen, which is a Phase 7 job. A fullscreen run
 with the glow on held 59.9 fps over 687 frames with no missed refreshes.
 
-The CPU is the i7-4510U, a 2014 laptop part, and this session's figures were taken on
-battery with 40-50% of the CPU busy elsewhere, so the spread is wide. Start-up's floor
+The CPU is the i7-4510U, a 2014 laptop part, and these figures were taken on battery
+with 40-50% of the CPU busy elsewhere, so the spread is wide. Start-up's floor
 here is Direct3D 12 device creation waking the GeForce 840M from Optimus power-off;
 everything else takes about 0.3 s. The Intel HD 4400 is always on but reachable only
-through OpenGL, where pipeline creation fails on a downlevel limit (a Phase 7 item), so
-300 ms on this machine would need the window up before the GPU is. The pacing figure
-is frames delivered against refreshes elapsed; with frames queued ahead, the
-swapchain's buffers come back at 15.5 and 31 ms intervals that average one refresh.
+through OpenGL, where pipeline creation fails on a downlevel limit (a Phase 7 item),
+so 300 ms on this machine would need the window up before the GPU is. The pacing
+figure is frames delivered against refreshes elapsed; with frames queued ahead,
+the swapchain's buffers come back at 15.5 and 31 ms intervals that average one refresh.
 
 ### Building on the Windows reference PC
 

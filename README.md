@@ -9,9 +9,10 @@ plan, with every decision and phase, is in [docs/plan.md](docs/plan.md).
 
 ## Status
 
-Early work: Phases 0 to 3 are done, so the renderer draws the parity views; Phase 4,
-now playing, is next. See
-[Progress](docs/plan.md#progress) in the plan.
+Early work: Phases 0 to 5 are done, so the app captures, analyses and draws the parity
+views, follows whatever is playing, and runs off its own menu; Phase 6, the new visuals,
+is next. What each phase still leaves open is in [Progress](docs/plan.md#progress) in
+the plan.
 
 | Part | State |
 |---|---|
@@ -19,7 +20,7 @@ now playing, is next. See
 | `sonorant-core` | Every setting and preset, TOML settings, presets and themes, the Nostalgia+ importer, palettes, the analysis engine and thread, and a WAV source |
 | `sonorant-platform` | Windows: WASAPI loopback of the whole system or one app, and now playing from SMTC. Linux: PipeWire capture and now playing from MPRIS, neither yet run on a Linux machine |
 | `sonorant-render` | The whole picture: the pane and deck layouts, the GPU history store, the spectrogram, the curve strips, a text and shape overlay (IBM Plex, bundled) carrying the grid, scales and labels, the waveform lanes, goniometer, meters and readouts, the colour bar and status line, the floating-point target and its glow, GPU pass timing, and golden renders |
-| `sonorant` | Captures, analyses and draws the live spectrogram with a status line and a provisional menu; `sonorant capture` runs the pipeline without a window |
+| `sonorant` | The app: the window and the frame loop, the menu and the keyboard over one model, the searchable help, the hover readout, the quick bar and the transport; `sonorant capture` runs the pipeline without a window |
 
 ## Building
 
