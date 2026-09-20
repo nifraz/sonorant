@@ -1106,6 +1106,7 @@ dependencies = [
  "pipewire",
  "windows",
  "windows-core",
+ "zbus",
 ]
 
 [[package]]

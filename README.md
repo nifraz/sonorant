@@ -17,7 +17,7 @@ now playing, is next. See
 |---|---|
 | `sonorant-dsp` | Verified against Nostalgia+'s reference vectors: the multi-resolution FFT bank, all six windows, mid/side and single-channel modes, BS.1770 loudness and true peak, overs, dynamic range, curve shaping and ballistics, notes, tempo and brightness |
 | `sonorant-core` | Every setting and preset, TOML settings, presets and themes, the Nostalgia+ importer, palettes, the analysis engine and thread, and a WAV source |
-| `sonorant-platform` | WASAPI loopback of the whole system or one app on Windows; PipeWire on Linux (not yet compiled) |
+| `sonorant-platform` | Windows: WASAPI loopback of the whole system or one app, and now playing from SMTC. Linux: PipeWire capture and now playing from MPRIS, neither yet run on a Linux machine |
 | `sonorant-render` | The whole picture: the pane and deck layouts, the GPU history store, the spectrogram, the curve strips, a text and shape overlay (IBM Plex, bundled) carrying the grid, scales and labels, the waveform lanes, goniometer, meters and readouts, the colour bar and status line, the floating-point target and its glow, GPU pass timing, and golden renders |
 | `sonorant` | Captures, analyses and draws the live spectrogram with a status line and a provisional menu; `sonorant capture` runs the pipeline without a window |
 
@@ -87,6 +87,15 @@ The DSP tests compare against [tests/reference](tests/reference), numbers export
 Nostalgia+ by its test harness (`build\export.cmd <dir>` in that repository). Spectra
 have to agree within 0.01 dB above -120 dBFS, loudness within 0.01 LU, and notes, overs
 and tempo exactly.
+
+The Linux code can at least be type-checked from Windows, which is worth doing before
+sending anything to CI. PipeWire needs its development headers, so capture is behind a
+feature that this leaves off; everything else, MPRIS included, is compiled:
+
+```sh
+rustup target add x86_64-unknown-linux-gnu
+cargo check -p sonorant-platform --target x86_64-unknown-linux-gnu --no-default-features
+```
 
 ## Layout
 

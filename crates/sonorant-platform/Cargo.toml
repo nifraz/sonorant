@@ -37,7 +37,16 @@ windows = { workspace = true, features = [
 windows-core = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-pipewire = { workspace = true }
+# Optional so the MPRIS code can be type-checked on a machine with no PipeWire
+# headers: `--no-default-features` for the Linux target leaves capture out. Builds
+# and CI always have it on.
+pipewire = { workspace = true, optional = true }
+zbus = { workspace = true }
+
+[features]
+default = ["capture"]
+# PipeWire capture. Needs the PipeWire development headers to build.
+capture = ["dep:pipewire"]
 
 [lints]
 workspace = true
