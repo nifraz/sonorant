@@ -57,10 +57,11 @@ possible, and follows whatever player is running instead of living inside one.
 
 ## Progress
 
-*As of 2026-09-20, the end of the second working session.* Phases 0 to 2 are done apart
-from the checks that need other machines or CI. The three targets missed in the first
-session are met or explained (see [Measurements](#measurements)). Phase 3 is two steps
-of six in, and the next session picks it up at [Next](#next).
+*As of 2026-09-20, the end of the second working session.* Phases 0 to 3 are done apart
+from the checks that need other machines or CI, and three pieces of Phase 3 that can
+only be finished in a later phase (below). The three targets missed in the first session
+are met or explained (see [Measurements](#measurements)). The next session starts Phase
+4 at [Next](#next).
 
 **Phase 0 (repository, CI, skeleton): done, except clean frame pacing and CI**
 
@@ -81,9 +82,11 @@ of six in, and the next session picks it up at [Next](#next).
   a 40 s windowed run misses 0.5% of refreshes with 40-50% background load. DXGI's own
   present counters are read where they move (independent flip); under Optimus
   composition they don't. Stalls over 100 ms are logged with where the time went.
-- [ ] No dropped frames in steady state: close (0.5%) but not zero on the reference PC.
-  Ubuntu (GNOME Wayland at 125% and 150%), Windows 11 and a 144 Hz monitor aren't
-  measured yet.
+- [x] No dropped frames in steady state, fullscreen: a 12 s run at 1920x1080 with the
+  glow on delivered 687 frames and missed none. Windowed it's 0.5%, where the window is
+  composited with everything else on a busy machine.
+- [ ] The same on Ubuntu (GNOME Wayland at 125% and 150%), on Windows 11, and on a
+  144 Hz monitor: not measured yet.
 - [ ] CI green on all three runners.
 
 **Phase 1 (DSP, verified): done**
@@ -127,56 +130,82 @@ of six in, and the next session picks it up at [Next](#next).
 - [ ] Capture-to-analysis latency measured (target under 15 ms).
 - [ ] Ubuntu 24.04 and 26.04, and Windows 11.
 
-**Phase 3 (renderer, parity): steps 1 and 2 of 6 done**
+**Phase 3 (renderer, parity): done, apart from three pieces that belong to later phases**
 
 - [x] The pane layout, the history store (Float16 level pairs in a texture array, each
   row's range in a side texture, row timestamps on the CPU), and the spectrogram pass. It
   maps any axis, range and palette per pixel, scrolls by the audio clock, and freezes.
-- [x] The app draws live analysis: capture or a WAV file, then the analysis thread, the
-  history store and the spectrogram, with a status line showing capture, loudness, tempo
-  and pacing.
 - [x] Start-up: only the platform's backend opens (Direct3D 12, Vulkan on Linux), the
   rest only as a fallback, and capture opens in parallel. 4.3 s became 1.1-2.7 s; what's
   left is waking the GeForce behind Optimus (see [Measurements](#measurements)).
-- [x] Step 1, the curve strips (`curves.rs`, `curves.wgsl`): line with gradient fill,
-  bars and LED, the peak, average, minimum and amber reference traces (`A` holds and
-  drops it, `B` cycles the style), and the plain, lines, grid and chessboard backgrounds.
-  One fragment pass per strip measures each pixel's distance to the nearby segments, so
-  lines are anti-aliased and translucent traces don't bead at the joins.
-- [x] Step 2, text and scales: `overlay.rs` draws rectangles, gradients, anti-aliased
-  lines and text in three layers around the curves; glyphon 0.12 and cosmic-text 0.19
-  shape and draw IBM Plex Sans (Regular, Light, Medium) and Plex Mono, bundled with
-  their OFL licence and shaped once per label. `axes.rs` ports the frequency grid and
-  its labels (octaves down to semitones by the space available, note, Hz or both), the
-  gutter and outer label columns with their unit captions, semitone lines, time marks,
-  the level scale, the scale lane and the channel labels.
+- [x] **Curves** (`curves.rs`): line with its gradient fill, bars and LED, the peak,
+  average, minimum and amber reference traces (`A` holds and drops it, `B` cycles the
+  style), and the plain, lines, grid and chessboard backgrounds. One fragment pass per
+  strip measures each pixel's distance to the segments near it, so lines are
+  anti-aliased and a translucent trace doesn't bead where its segments meet.
+- [x] **Text and scales** (`overlay.rs`, `axes.rs`): rectangles, gradients,
+  anti-aliased lines and text in three layers around the curves, with glyphon and
+  cosmic-text drawing IBM Plex Sans (Regular, Light, Medium) and Plex Mono, bundled
+  under the OFL and shaped once per label. The frequency grid and its labels (octaves
+  down to semitones as the space allows, as notes, hertz or both), the gutter and outer
+  label columns with their unit captions, semitone lines, time marks, the level scale,
+  the scale lane and the channel labels.
+- [x] **The bottom band** (`band.rs`, `deck.rs`): the waveform lanes and the centre
+  deck, ported rule for rule. The 36 reference deck layouts in `tests/reference/layout.json`
+  match rectangle for rectangle. Drawn: the goniometer, the transport with its shared
+  bar column, correlation and balance, the readout grid, the colour bar, and the status
+  line over the image, where Nostalgia+ had it (egui no longer draws one).
+- [x] **The glow and the immersive treatment** (`bloom.rs`): the visuals render into a
+  linear-light floating-point target; the glow is thresholded and blurred at an eighth
+  of the size and composited back, as the GDI+ version did. `I` turns immersive mode on,
+  with the beat flare and the palette drifting with the music's brightness.
+- [x] **Golden renders** (`tests/golden.rs`): the whole scene drawn offscreen and
+  compared with a committed picture, one per software renderer (WARP's is committed;
+  lavapipe's will be on the first Linux run). On a hardware GPU it checks the frame is
+  drawn rather than its pixels. It found a real bug immediately: the overlay's
+  screen-size uniform read as zeros on WARP, which put every shape at infinity.
+- [x] **GPU timing** (`timing.rs`): timestamp queries around each pass, with the total
+  in the status line. At 1920x1080 on the reference PC a frame costs 2.9 ms without the
+  glow and 3.3 ms with it (see [Measurements](#measurements)).
 - [x] The 2D layers blend sRGB-encoded colours, as GDI+ did, drawing on the swapchain's
   plain view; blended in linear light, Nostalgia+'s faint lines would come out several
-  times brighter. The spectrogram stays on the sRGB view.
-- [x] `--screenshot <file.png>` saves the window's own frame after
-  `--screenshot-seconds` (for checking the renderer without capturing the screen), and
-  `--settings <dir>` runs with a settings folder of its own, for clean, repeatable runs.
-- Harmonics are drawn from the hover position, so they move to Phase 5 with the hover
-  readout. The status line is still egui's; it moves into the renderer in step 3.
+  times brighter. The spectrogram and the glow work in linear light.
+- [x] `--screenshot <file.png>` saves the window's own frame, `--settings <dir>` runs
+  with a settings folder of its own, and `sonorant-core`'s `hop_times` example prints
+  the per-hop distribution. All three are for checking work without a screen capture.
+
+Three pieces are written but can only be finished later, and have moved:
+
+- **The backdrop** needs album art, so it moves to Phase 4 with the media session.
+- **The harmonic ruler** is drawn from the hover position, so it moves to Phase 5 with
+  the hover readout.
+- **The quick bar** is a strip of buttons that do nothing until the menu model and input
+  exist, so it moves to Phase 5 with them. Its `Reserve`/`HeightFor` tests go with it.
+
+Parity is judged against Nostalgia+'s current code and its exported layouts, not against
+the screenshots in `tests/reference/screenshots/`: those were taken before the centre
+deck was rebuilt, and still show the title and loudness figures floating in the screen's
+top corners.
 
 ### Next
 
-Phase 3 continues at step 3; steps 1 and 2 are done (see [Progress](#progress)).
+Phase 4, now playing. In order:
 
-3. The goniometer, correlation and balance bars, waveform lanes, colour bar, and the
-   status line drawn in the renderer (Nostalgia+'s top-left line over the image, which
-   also sets the 14 px inset the overlaid labels already take). The overlay and
-   `Readback` are ready for all of it.
-4. The floating-point target and bloom (today's glow), the backdrop, hue drift and beat
-   flare.
-5. The centre deck, bottom band and quick bar, with Nostalgia+'s layout-budget tests
-   (`tests/reference/layout.json` has its rectangles).
-6. Golden renders on lavapipe and WARP, and GPU timestamp queries for the 3 ms budget.
+1. The `MediaSession` trait and SMTC on Windows: the fields the deck already lays out
+   (title, artists, album, composer, year, artwork, position, length, play state), with
+   the position cached and extrapolated between updates.
+2. Artwork: the deck's frame is drawn and waiting for it, and the immersive backdrop
+   needs it too.
+3. MPRIS over zbus on Linux, and the track-change resets (LUFS-I, LRA, BPM, overs).
+4. Capture following the player, with the status line saying what it followed.
 
 Also open from earlier phases: push to GitHub and get CI green, which includes the first
-PipeWire build, and the checks on other machines listed above. A WSL Ubuntu on the
-reference PC would let the Linux code compile before CI exists. The first frame's
-100-odd ms of lazy initialisation (logged as a stall) could move into start-up.
+PipeWire build and the first lavapipe golden, and the checks on other machines listed
+above. A WSL Ubuntu on the reference PC would let the Linux code compile before CI
+exists. Two smaller things: the first frame's 100-odd ms of lazy initialisation (logged
+as a stall) could move into start-up, and the deck's fixed pixel sizes are laid out in
+physical pixels, which is right at 100% scaling and cramped at 150% until Phase 5's
+HiDPI pass.
 
 ### Measurements
 
@@ -186,7 +215,12 @@ reference PC would let the Linux code compile before CI exists. The first frame'
 | Display projection, 1,080 columns / history grid, 2,048 bins | 0.32 / 0.59 ms | 0.03-0.07 / 0.06-0.14 ms | |
 | Frame pacing, 59.94 Hz panel, GeForce 840M on Direct3D 12, windowed, 40 s | 8% "missed" (counted per interval), stalls of 0.5 s | 59.6 fps, 11 of 2,205 refreshes missed (0.5%); one 0.5 s stall in five runs, blocked in the swapchain | No dropped frames in steady state |
 | First frame, release build | 4.3 s | 1.1-2.7 s, of which opening the GPU is 0.8-1.9 s | Under 300 ms |
+| GPU time a frame, 1920x1080 fullscreen, GeForce 840M | not measured | 2.9 ms (visuals 1.0, composite 0.8, furniture 1.0); 3.3 ms with the glow | Under 3 ms at 2560x1440, under 6 ms with every new visual |
 | Release binary (Windows, GNU toolchain) | 14.2 MB | 16.9 MB; 7.1 MB zipped | Under 15 MB download |
+
+The GPU figures are from the 840M at 1920x1080, which is what this machine's screen
+allows; 2560x1440 has to be timed offscreen, which is a Phase 7 job. A fullscreen run
+with the glow on held 59.9 fps over 687 frames with no missed refreshes.
 
 The CPU is the i7-4510U, a 2014 laptop part, and this session's figures were taken on
 battery with 40-50% of the CPU busy elsewhere, so the spread is wide. Start-up's floor
@@ -476,9 +510,10 @@ Phase 0 has no dependencies. Phases 1 and 2 can run in parallel after it.
   font fallback.
 - **Golden renders:** offscreen wgpu on software renderers in CI (lavapipe on Ubuntu, WARP
   on Windows), fed from the WAV source and compared with a tolerance.
-- **Done when:** the windowed, fullscreen and immersive views match the Nostalgia+
-  screenshots in content and layout, and a frame at 2560×1440 takes under 3 ms of GPU time
-  on an integrated GPU.
+- **Done when:** the windowed, fullscreen and immersive views match Nostalgia+ in
+  content and layout, and a frame at 2560×1440 takes under 3 ms of GPU time on an
+  integrated GPU. (Judged against Nostalgia+'s current code and its exported layouts:
+  the screenshots predate the centre deck. 1440p needs offscreen timing, in Phase 7.)
 
 ### Phase 4: now playing
 
@@ -600,19 +635,21 @@ Phase 0 has no dependencies. Phases 1 and 2 can run in parallel after it.
 
 ### Drawing (Phase 3)
 
-- [ ] Scrolling spectrogram, scroll speeds and cinematic mode
-- [ ] Palettes: Magma, Inferno, Viridis, Turbo, Ice, Grey, Nostalgia Red
-- [ ] Curve styles: line, bars and LED. Interpolation: flat peaks, linear-smooth and cubic
+- [x] Scrolling spectrogram, scroll speeds and cinematic mode
+- [x] Palettes: Magma, Inferno, Viridis, Turbo, Ice, Grey, Nostalgia Red
+- [x] Curve styles: line, bars and LED. Interpolation: flat peaks, linear-smooth and cubic
       spline. Filtering from none to strong
-- [ ] Peak, average and minimum traces; solid fill
-- [ ] Graph backgrounds: plain, lines, grid, chessboard
-- [ ] dB scale, time marks, semitone lines, axis labels, harmonics
-- [ ] Goniometer, correlation and balance bars
-- [ ] Waveform lanes
-- [ ] Glow (now bloom), backdrop, hue drift, beat flare
-- [ ] Colour bar and status line
-- [ ] Centre deck, bottom band and quick bar, with today's layout rules
-- [ ] Theme colour slots
+- [x] Peak, average and minimum traces; solid fill
+- [x] Graph backgrounds: plain, lines, grid, chessboard
+- [x] dB scale, time marks, semitone lines, axis labels; harmonics with the hover
+      readout in Phase 5
+- [x] Goniometer, correlation and balance bars
+- [x] Waveform lanes
+- [x] Glow (now bloom), hue drift, beat flare; the backdrop with artwork in Phase 4
+- [x] Colour bar and status line
+- [x] Centre deck and bottom band, with today's layout rules; the quick bar with its
+      buttons in Phase 5
+- [x] Theme colour slots
 
 ### Now playing (Phase 4)
 

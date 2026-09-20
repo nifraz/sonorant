@@ -9,7 +9,8 @@ plan, with every decision and phase, is in [docs/plan.md](docs/plan.md).
 
 ## Status
 
-Early work: Phases 0 to 2 are done and Phase 3, the renderer, is two steps of six in. See
+Early work: Phases 0 to 3 are done, so the renderer draws the parity views; Phase 4,
+now playing, is next. See
 [Progress](docs/plan.md#progress) in the plan.
 
 | Part | State |
@@ -17,7 +18,7 @@ Early work: Phases 0 to 2 are done and Phase 3, the renderer, is two steps of si
 | `sonorant-dsp` | Verified against Nostalgia+'s reference vectors: the multi-resolution FFT bank, all six windows, mid/side and single-channel modes, BS.1770 loudness and true peak, overs, dynamic range, curve shaping and ballistics, notes, tempo and brightness |
 | `sonorant-core` | Every setting and preset, TOML settings, presets and themes, the Nostalgia+ importer, palettes, the analysis engine and thread, and a WAV source |
 | `sonorant-platform` | WASAPI loopback of the whole system or one app on Windows; PipeWire on Linux (not yet compiled) |
-| `sonorant-render` | The pane layout, the GPU history store and the spectrogram, the curve strips, and a text and shape overlay (IBM Plex, bundled) carrying the frequency grid, time marks, level scale and scale lane |
+| `sonorant-render` | The whole picture: the pane and deck layouts, the GPU history store, the spectrogram, the curve strips, a text and shape overlay (IBM Plex, bundled) carrying the grid, scales and labels, the waveform lanes, goniometer, meters and readouts, the colour bar and status line, the floating-point target and its glow, GPU pass timing, and golden renders |
 | `sonorant` | Captures, analyses and draws the live spectrogram with a status line and a provisional menu; `sonorant capture` runs the pipeline without a window |
 
 ## Building
@@ -67,7 +68,9 @@ cargo run --release -- apps                   # the apps that can be captured al
 
 Right-click for the provisional menu. **Space** or a click freezes the picture while
 analysis carries on, **F11** toggles fullscreen, **A** holds the average spectrum as an
-amber reference (and drops it), and **B** cycles the curve between line, bars and LED. The status line shows what is being
+amber reference (and drops it), **B** cycles the curve between line, bars and LED, and
+**I** turns on immersive mode, with the glow, the beat flare and the palette drifting
+with the music's brightness. The status line shows what is being
 captured, loudness and tempo, the frame rate, the 99th percentile frame interval and the
 refreshes missed. On exit the pacing figures for the whole run are logged.
 
