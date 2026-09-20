@@ -61,9 +61,10 @@ possible, and follows whatever player is running instead of living inside one.
 machines, a real player or CI. Every piece Phase 3 deferred has now arrived: the
 backdrop in Phase 4, and the harmonic ruler and the quick bar in Phase 5. The three
 targets missed at the start are met or explained (see [Measurements](#measurements)).
-Phase 6 is under way: the phosphor scope and the zoomable long history are in, and what
-is left is at [Next](#next). A Linux machine has now built and run the app, so the
-PipeWire capture compiles for the first time and lavapipe has a golden of its own.
+Phase 6 is under way: the phosphor scope, the zoomable long history and the beat-reactive
+backdrop are in, and what is left is at [Next](#next). A Linux machine has now built and
+run the app, so the PipeWire capture compiles for the first time, lavapipe has a golden of
+its own, and Phase 4's now-playing half has been seen following a real player.
 
 **Phase 0 (repository, CI, skeleton): done, except clean frame pacing and CI**
 
@@ -232,10 +233,16 @@ top corners.
   headers, so capture moved behind a default feature; with it off, `cargo check --target
   x86_64-unknown-linux-gnu --no-default-features` builds and lints the crate from
   Windows. MPRIS is checked and linted this way. PipeWire capture still is not.
-- [ ] **Run against real players.** Nothing here has been seen working: Windows needs
-  MusicBee, Spotify and a browser; Ubuntu needs Rhythmbox, Strawberry, Spotify, Firefox
-  and VLC, and a Linux machine. `cargo run -p sonorant-platform --example now_playing`
-  prints what the session sees, on either platform, without the app.
+- [x] **Seen against a real player, on Linux.** Strawberry, over MPRIS: the player and
+  its process id, every deck field including the two SMTC cannot give (composer and
+  year), the length, the play state, artwork as a `file:` URL, and all four controls
+  reported as available. The position clock held where it was through a pause, which is
+  the behaviour it was written for and unit-tested on. The app drew that cover as its
+  backdrop, so the JPEG decoder and the backdrop path are exercised by a real player's
+  artwork rather than by the test picture.
+- [ ] **The rest of the players.** Windows needs MusicBee, Spotify and a browser; Ubuntu
+  needs Rhythmbox, Spotify, Firefox and VLC. `cargo run -p sonorant-platform --example
+  now_playing` prints what the session sees, on either platform, without the app.
 - [ ] **`https://` artwork.** Spotify and the browsers report web URLs over MPRIS.
   Reaching them needs an HTTP client and a TLS stack, which is a download-size decision
   held until the size pass; the `ArtFetcher` seam is there and the loader logs what it
@@ -309,7 +316,7 @@ top corners.
 - [ ] **The transport and the seek bar against a real player.** They are wired to the
   same `send` Phase 4 left guarded, and nothing has pressed them with a player running.
 
-**Phase 6 (new visuals): two of the five are in**
+**Phase 6 (new visuals): three of the five are in**
 
 - [x] **The phosphor scope** (`render/phosphor.rs`). The goniometer keeps a
   floating-point accumulator between frames, fades it by how much real time has passed
@@ -340,15 +347,34 @@ top corners.
   app started with, which was the carried-over bug. A 256 MB budget caps it, because a
   row costs 8 KB whatever the speed; the default comes to 5.7 minutes and 160 MB, against
   the plan's 300 MB target, and the app logs the reach it settled on.
-- [ ] The 3D waterfall, the beat-reactive backdrop and the quality setting.
+- [x] **The beat-reactive backdrop** (`render/backdrop.rs`): a full-screen field of
+  light in the visuals target, over the blurred cover when there is one and under the
+  spectrogram either way, adding light and never taking any away. No new settings; it
+  takes its colours from the palette, so the colour drift carries it. The beat is a phase
+  rather than a flag, carried forward at the tempo and pulled back into step at each
+  onset, because an envelope alone gives a backdrop that twitches when the detector finds
+  a hit and sits still otherwise. Three things came out of looking at it rather than
+  reasoning about it: the ridges were low enough in frequency to put the whole window
+  inside one lobe, which is a wash rather than a field; only the crests light up now; and
+  the rings had their light ahead of the front instead of behind it, so a beat read as a
+  circle being drawn rather than as something travelling.
+- [ ] The 3D waterfall and the quality setting.
 - [ ] **Done when:** each visual has golden images, and with everything on a frame stays
-  under 6 ms of GPU time at 1440p on an integrated GPU. The phosphor and the history view
-  have their pictures and their tests; the 1440p figure waits for the rest.
+  under 6 ms of GPU time at 1440p on an integrated GPU. The three that are in have their
+  pictures and their tests; the 1440p figure waits for the rest.
+
+**What a golden cannot be asked to do.** The backdrop is in the scene golden, but at a
+backdrop's strength it moves the mean by a third of a level out of 255, well inside the
+tolerance a golden has to allow for a software renderer. Deleting the whole pass would
+not fail it. Anything whose job is to be subtle needs a test that looks for the thing
+itself, not a picture of everything at once: the backdrop's own test renders it alone,
+finds the ring where the phase says it should be, and checks the light is behind the
+front rather than ahead of it.
 
 ### Next
 
-Phase 6's last three: the 3D waterfall, the beat-reactive backdrop and the quality
-setting. The waterfall wants the history store's mip chain, which the
+Phase 6's last two: the 3D waterfall and the quality setting. The waterfall wants the
+history store's mip chain, which the
 [history store](#history-store) section describes and nothing has built yet: a zoomed-out
 view reads a coarser level instead of aliasing, and the mesh reads it too.
 
@@ -870,7 +896,7 @@ Phase 0 has no dependencies. Phases 1 and 2 can run in parallel after it.
 - [x] Phosphor scope with bloom
 - [x] Zoomable long history
 - [ ] 3D waterfall view
-- [ ] Beat-reactive shader backdrop
+- [x] Beat-reactive shader backdrop
 - [x] Screen stays awake while fullscreen and playing
 - [ ] Menus, help and dialogs readable by screen readers (AccessKit is attached; nothing
       has been read with Orca or Narrator yet — Phase 7)
