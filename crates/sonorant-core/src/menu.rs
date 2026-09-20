@@ -1154,6 +1154,34 @@ fn deck(s: &Settings) -> Vec<Item> {
             s,
         ),
         flag(
+            "Phosphor scope",
+            "Let the goniometer's trace fade like a CRT rather than blink each frame",
+            Flag::DeckPhosphor,
+            s,
+        ),
+        sizes(
+            "Phosphor persistence",
+            "How long the trace takes to fade away",
+            Number::PhosphorMs,
+            &[120.0, 250.0, 500.0, 1000.0, 2000.0],
+            |v| {
+                if v >= 1000.0 {
+                    format!("{:.1} s", v / 1000.0)
+                } else {
+                    format!("{v:.0} ms")
+                }
+            },
+            s,
+        ),
+        sizes(
+            "Phosphor intensity",
+            "How hard the trace is written",
+            Number::PhosphorIntensity,
+            &[40.0, 70.0, 100.0, 150.0, 220.0],
+            |v| format!("{v:.0}%"),
+            s,
+        ),
+        flag(
             "Correlation",
             "How alike the two channels are",
             Flag::DeckCorrelation,

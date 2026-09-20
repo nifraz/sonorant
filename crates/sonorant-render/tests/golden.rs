@@ -19,11 +19,13 @@ use sonorant_core::settings::Settings;
 use sonorant_render::artwork::{ArtworkPass, Picture};
 use sonorant_render::band::BandLayout;
 use sonorant_render::bloom::{self, Visuals};
+use sonorant_render::colour::Rgba;
 use sonorant_render::curves::{CurveData, CurveLook, CurvePass, CurveView};
 use sonorant_render::deck::{DeckState, TrackInfo, WaveRing};
 use sonorant_render::history::{HistoryStore, RowIn};
 use sonorant_render::layout::{Rect, ScopeLayout};
 use sonorant_render::overlay::{Face, Layer, Overlay};
+use sonorant_render::phosphor::{Phosphor, PhosphorLook, Sweep};
 use sonorant_render::readback::{Readback, write_png};
 use sonorant_render::spectrogram::{PaneView, SpectrogramPass};
 use sonorant_render::{axes, deck};
@@ -289,6 +291,7 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue) -> (u32, u32, Vec<u8>) {
             position: Some((62.0, 245.0)),
             playing: true,
             has_art: true,
+            phosphor: true,
         },
         1.0,
         label_px,
@@ -323,6 +326,37 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue) -> (u32, u32, Vec<u8>) {
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("golden"),
     });
+    // The phosphor screen, swept twice at a sixtieth of a second: the first sweep starts
+    // it from black and the second fades that and writes over it, so the golden covers
+    // the fade as well as the trace, the glow and the composite.
+    let mut phosphor = Phosphor::new(device, wgpu::TextureFormat::Rgba8Unorm);
+    let look = PhosphorLook {
+        colour: Rgba::rgb(palette::color_at(&lut, 0.80), 255),
+        ..PhosphorLook::default()
+    };
+    let mut trace = Vec::new();
+    for half in 0..2 {
+        let from = half * scope.len() / 2;
+        let to = from + scope.len() / 2;
+        deck::goniometer_trace(
+            band.deck.goniometer,
+            &scope[from..to],
+            &scope_r[from..to],
+            scope.len() / 2,
+            &mut trace,
+        );
+        phosphor.accumulate(
+            device,
+            queue,
+            &mut encoder,
+            &Sweep {
+                rect: band.deck.goniometer,
+                dt: 1.0 / 60.0,
+                look: &look,
+                points: &trace,
+            },
+        );
+    }
     {
         let bg = palette::background(&lut);
         let linear = |c: u8| {
@@ -403,6 +437,7 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue) -> (u32, u32, Vec<u8>) {
         overlay.draw(Layer::Under, &mut pass);
         curves.draw(&mut pass);
         overlay.draw(Layer::Over, &mut pass);
+        phosphor.draw(queue, &mut pass, (WIDTH, HEIGHT), 1.0);
         // At this size the layout spends the deck's width on the track info instead,
         // as Nostalgia+'s does; `the_cover_fills_its_frame` covers the drawing.
         if band.deck.art.w > 0 {
@@ -532,6 +567,120 @@ fn the_cover_fills_its_frame() {
     assert_eq!(at(48, 20), [0, 0, 0], "right of the frame");
     assert_eq!(at(30, 6), [0, 0, 0], "above the frame");
     assert_eq!(at(30, 33), [0, 0, 0], "below the frame");
+}
+
+/// The phosphor holds its light between frames and lets it go on a clock.
+///
+/// The golden covers one sweep and one fade; this covers a long run of them, which is
+/// where the fade being exponential in real time either holds or drifts. A trace is
+/// swept until it settles, then the sweeps stop and exactly one persistence passes: what
+/// is left should be the hundredth the setting promises.
+#[test]
+fn the_phosphor_fades_on_a_clock() {
+    const SIDE: u32 = 64;
+    const PERSISTENCE: f64 = 0.5;
+    let Some((device, queue, _, _)) = open_gpu() else {
+        eprintln!("no GPU here; skipping the phosphor fade");
+        return;
+    };
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("phosphor"),
+        size: wgpu::Extent3d {
+            width: SIDE,
+            height: SIDE,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut phosphor = Phosphor::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+    let rect = Rect::new(0, 0, SIDE as i32, SIDE as i32);
+    let look = PhosphorLook {
+        persistence: PERSISTENCE,
+        // No halo: this is about what the accumulator holds, and a blur would mix the
+        // lit row into the reading taken beside it.
+        glow: 0.0,
+        colour: Rgba::argb(255, 255, 255, 255),
+        ..PhosphorLook::default()
+    };
+    // A line straight across the middle, swept every sixtieth of a second.
+    let line: Vec<[f32; 2]> = (0..SIDE).map(|x| [x as f32, 32.0]).collect();
+    let dt = 1.0 / 60.0;
+
+    let mut sweep_and_read = |points: &[[f32; 2]], sweeps: usize| {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("phosphor"),
+        });
+        for _ in 0..sweeps {
+            phosphor.accumulate(
+                &device,
+                &queue,
+                &mut encoder,
+                &Sweep {
+                    rect,
+                    dt,
+                    look: &look,
+                    points,
+                },
+            );
+        }
+        {
+            let mut pass = encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("phosphor"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                })
+                .forget_lifetime();
+            phosphor.draw(&queue, &mut pass, (SIDE, SIDE), 1.0);
+        }
+        let shot = Readback::record(&device, &mut encoder, &target);
+        queue.submit([encoder.finish()]);
+        let (w, _h, pixels) = shot.pixels(&device).expect("the frame reads back");
+        // The lit row, as encoded light: the composite writes sRGB, so undo that to
+        // compare two readings as amounts of light rather than as pixel values.
+        let i = ((32 * w + 32) * 4) as usize;
+        let v = f64::from(pixels[i]) / 255.0;
+        let lit = if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        };
+        // Nothing should have spilled off the line.
+        let j = ((10 * w + 32) * 4) as usize;
+        assert_eq!(
+            pixels[j], 0,
+            "the phosphor lit a row the trace never crossed"
+        );
+        lit
+    };
+
+    // Two persistences of sweeping is well past settled.
+    let settled = sweep_and_read(&line, (2.0 * PERSISTENCE / dt) as usize);
+    assert!(settled > 0.05, "the trace barely registered: {settled}");
+    // Then exactly one persistence with nothing drawn.
+    let left = sweep_and_read(&[], (PERSISTENCE / dt).round() as usize);
+    let ratio = left / settled;
+    assert!(
+        (0.005..0.02).contains(&ratio),
+        "a hundredth should be left after one persistence, not {ratio} ({left} of {settled})"
+    );
 }
 
 #[test]

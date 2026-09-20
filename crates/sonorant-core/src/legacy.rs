@@ -299,6 +299,11 @@ impl LegacySettings {
             // New here: Nostalgia+ drew one row a frame, with no zoom and no blending.
             px_per_row: s.px_per_row,
             smooth_time: s.smooth_time,
+            // New here too: Nostalgia+ redrew the goniometer from scratch every frame,
+            // so it had nothing to persist and no key for any of this.
+            deck_phosphor: s.deck_phosphor,
+            phosphor_ms: s.phosphor_ms,
+            phosphor_intensity: s.phosphor_intensity,
         };
         LegacySettings {
             settings,

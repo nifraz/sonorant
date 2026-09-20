@@ -53,6 +53,9 @@ pub struct DeckState<'a> {
     /// The newest audio, for the goniometer.
     pub scope_left: &'a [f32],
     pub scope_right: &'a [f32],
+    /// Whether the goniometer's trace is the phosphor screen's rather than this
+    /// overlay's. The frame and its guides are drawn either way; only the figure moves.
+    pub phosphor: bool,
     pub track: &'a TrackInfo,
     /// Position and length in seconds, when a player is reporting them.
     pub position: Option<(f64, f64)>,
@@ -335,9 +338,41 @@ fn track_info(o: &mut Overlay, r: Rect, track: &TrackInfo, alpha: f64, px: f32) 
     }
 }
 
-/// Lissajous plot of the two channels, rotated 45 degrees so mono reads as a vertical
-/// line: a circle is a wide image, a horizontal line is out of phase, and a lean to one
-/// side is a level imbalance.
+/// Where one stereo sample lands in the goniometer, in the square's own pixels with the
+/// origin at its top left.
+///
+/// Rotated 45 degrees, so mono reads as a vertical line: a circle is a wide image, a
+/// horizontal line is out of phase, and a lean to one side is a level imbalance. The
+/// 1/sqrt(2) is so a hard-panned full-scale signal reaches the frame rather than
+/// spilling out of it.
+pub fn goniometer_point(square: Rect, left: f32, right: f32) -> [f32; 2] {
+    const K: f32 = std::f32::consts::FRAC_1_SQRT_2;
+    let (w, h) = (square.w as f32, square.h as f32);
+    let radius = w.min(h) / 2.0 - 3.0;
+    [
+        w / 2.0 + (left - right) * K * radius,
+        h / 2.0 - (left + right) * K * radius,
+    ]
+}
+
+/// The newest `count` samples as a trace in the square's own pixels, for the phosphor
+/// screen. Points outside the frame are kept: the screen clips them, and dropping them
+/// would break the line either side of a loud transient.
+pub fn goniometer_trace(
+    square: Rect,
+    left: &[f32],
+    right: &[f32],
+    count: usize,
+    into: &mut Vec<[f32; 2]>,
+) {
+    into.clear();
+    let n = left.len().min(right.len());
+    let take = count.min(n);
+    into.extend((n - take..n).map(|i| goniometer_point(square, left[i], right[i])));
+}
+
+/// The goniometer's frame, its guides, and the figure itself when the phosphor screen
+/// is not drawing it.
 fn goniometer(o: &mut Overlay, r: Rect, lut: &Lut, state: &DeckState<'_>, alpha: f64) {
     let (x, y, w, h) = (r.x as f32, r.y as f32, r.w as f32, r.h as f32);
     o.rect(
@@ -362,6 +397,11 @@ fn goniometer(o: &mut Overlay, r: Rect, lut: &Lut, state: &DeckState<'_>, alpha:
     o.line(Layer::Over, x + w, y, x, y + h, 1.0, guide);
     o.vline(Layer::Over, x + (r.w / 2) as f32, y, y + h, guide);
 
+    if state.phosphor {
+        // The figure is the phosphor screen's, composited over this frame in its own
+        // pass. Drawing it here as well would double it.
+        return;
+    }
     let n = state.scope_left.len().min(state.scope_right.len());
     if n < 2 {
         return;
@@ -373,13 +413,11 @@ fn goniometer(o: &mut Overlay, r: Rect, lut: &Lut, state: &DeckState<'_>, alpha:
         &state.scope_left[n - take..],
         &state.scope_right[n - take..],
     );
-    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
-    let rad = w.min(h) / 2.0 - 3.0;
-    // 1/sqrt(2) so a hard-panned full-scale signal reaches the frame rather than
-    // spilling out of it.
-    const K: f32 = std::f32::consts::FRAC_1_SQRT_2;
     let trace = Rgba::rgb(palette::color_at(lut, 0.80), 150).faded(alpha);
-    let point = |i: usize| (cx + (l[i] - rr[i]) * K * rad, cy - (l[i] + rr[i]) * K * rad);
+    let point = |i: usize| {
+        let p = goniometer_point(r, l[i], rr[i]);
+        (x + p[0], y + p[1])
+    };
     let mut prev = point(0);
     for i in 1..take {
         let p = point(i);

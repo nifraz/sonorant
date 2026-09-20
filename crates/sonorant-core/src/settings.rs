@@ -313,6 +313,13 @@ pub struct Settings {
     pub show_center_deck: bool,
     pub deck_height_px: i32,
     pub deck_show_goniometer: bool,
+    /// Draw the goniometer as a phosphor screen: the light fades with real time rather
+    /// than with the frame, so a sweep leaves a tail and a held note burns in.
+    pub deck_phosphor: bool,
+    /// How long the phosphor takes to fade to a hundredth, in milliseconds.
+    pub phosphor_ms: i32,
+    /// How hard the phosphor trace is written, as a percentage.
+    pub phosphor_intensity: i32,
     pub deck_show_transport: bool,
     pub deck_show_artwork: bool,
     pub deck_show_track_info: bool,
@@ -412,6 +419,9 @@ impl Default for Settings {
             show_center_deck: true,
             deck_height_px: 120,
             deck_show_goniometer: true,
+            deck_phosphor: true,
+            phosphor_ms: 500,
+            phosphor_intensity: 100,
             deck_show_transport: true,
             deck_show_artwork: true,
             deck_show_track_info: true,
@@ -625,6 +635,7 @@ named_enum! {
         ShowScaleUnits = "ShowScaleUnits",
         ShowCentreDeck = "ShowCentreDeck",
         DeckGoniometer = "DeckGoniometer",
+        DeckPhosphor = "DeckPhosphor",
         DeckTransport = "DeckTransport",
         DeckArtwork = "DeckArtwork",
         DeckTrackInfo = "DeckTrackInfo",
@@ -674,6 +685,8 @@ named_enum! {
         LabelFontSize = "LabelFontSize",
         BackdropPct = "BackdropPct",
         ColourFollowDegrees = "ColourFollowDegrees",
+        PhosphorMs = "PhosphorMs",
+        PhosphorIntensity = "PhosphorIntensity",
     } default RowsPerSecond
 }
 
@@ -712,6 +725,10 @@ impl Number {
             Number::LabelFontSize => (5.0, 20.0, 0.5, false, "pt"),
             Number::BackdropPct => (0.0, 60.0, 2.0, true, "%"),
             Number::ColourFollowDegrees => (0.0, 180.0, 5.0, true, "deg"),
+            // Under about 60 ms there is no tail worth the name, and past two seconds a
+            // busy passage fills the square and stops saying anything.
+            Number::PhosphorMs => (60.0, 2000.0, 20.0, true, "ms"),
+            Number::PhosphorIntensity => (10.0, 300.0, 10.0, true, "%"),
         };
         Range {
             min,
@@ -756,6 +773,7 @@ impl Settings {
             Flag::ShowScaleUnits => self.show_scale_units,
             Flag::ShowCentreDeck => self.show_center_deck,
             Flag::DeckGoniometer => self.deck_show_goniometer,
+            Flag::DeckPhosphor => self.deck_phosphor,
             Flag::DeckTransport => self.deck_show_transport,
             Flag::DeckArtwork => self.deck_show_artwork,
             Flag::DeckTrackInfo => self.deck_show_track_info,
@@ -824,6 +842,7 @@ impl Settings {
             Flag::ShowScaleUnits => &mut self.show_scale_units,
             Flag::ShowCentreDeck => &mut self.show_center_deck,
             Flag::DeckGoniometer => &mut self.deck_show_goniometer,
+            Flag::DeckPhosphor => &mut self.deck_phosphor,
             Flag::DeckTransport => &mut self.deck_show_transport,
             Flag::DeckArtwork => &mut self.deck_show_artwork,
             Flag::DeckTrackInfo => &mut self.deck_show_track_info,
@@ -872,6 +891,8 @@ impl Settings {
             Number::LabelFontSize => f64::from(self.label_font_size),
             Number::BackdropPct => f64::from(self.backdrop_pct),
             Number::ColourFollowDegrees => f64::from(self.colour_follow_degrees),
+            Number::PhosphorMs => f64::from(self.phosphor_ms),
+            Number::PhosphorIntensity => f64::from(self.phosphor_intensity),
         }
     }
 
@@ -903,6 +924,8 @@ impl Settings {
             Number::LabelFontSize => self.label_font_size = v as f32,
             Number::BackdropPct => self.backdrop_pct = v as i32,
             Number::ColourFollowDegrees => self.colour_follow_degrees = v as i32,
+            Number::PhosphorMs => self.phosphor_ms = v as i32,
+            Number::PhosphorIntensity => self.phosphor_intensity = v as i32,
         }
     }
 

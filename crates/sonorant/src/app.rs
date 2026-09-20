@@ -12,8 +12,9 @@ use sonorant_core::settings::{FrameCap, Settings};
 use sonorant_core::store::{self, Store};
 use sonorant_render::{
     ArtworkPass, BandLayout, CurveData, CurveLook, CurvePass, CurveView, DeckState, GpuTimer,
-    HistoryStore, Layer, Overlay, PaneView, QuickBar, Readback, Reading, Readout, Rect, RowIn,
-    ScopeLayout, SpectrogramPass, Visuals, WaveRing, axes, bloom, deck, hover, quickbar,
+    HistoryStore, Layer, Overlay, PaneView, Phosphor, PhosphorLook, QuickBar, Readback, Reading,
+    Readout, Rect, Rgba, RowIn, ScopeLayout, SpectrogramPass, Sweep, Visuals, WaveRing, axes,
+    bloom, deck, hover, phosphor, quickbar,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
@@ -42,6 +43,10 @@ const STATUS_EVERY: Duration = Duration::from_millis(250);
 const COLOUR_BAR_WIDTH: i32 = 40;
 /// A frame interval this long is logged with where the time went.
 const STALL: Duration = Duration::from_millis(100);
+/// The longest gap the phosphor treats as one frame. A longer one means the window was
+/// hidden or the app was stalled, where fading a quarter of a second at a time is both
+/// right to look at and a bound on how much trace one frame can draw.
+const PHOSPHOR_GAP: f64 = 0.25;
 /// How long a capture target that could not be opened is left alone before it is
 /// tried again.
 const CAPTURE_RETRY: Duration = Duration::from_secs(5);
@@ -87,6 +92,11 @@ struct Running {
     /// What each pass costs on the GPU.
     timer: GpuTimer,
     curves: CurvePass,
+    /// The goniometer's phosphor screen, when the setting has it drawing the figure.
+    phosphor: Phosphor,
+    /// This frame's trace, in the goniometer's own pixels. Kept to be refilled rather
+    /// than reallocated each frame.
+    trace: Vec<[f32; 2]>,
     overlay: Overlay,
     lut: Lut,
     /// The newest curves and the range they were measured against.
@@ -249,6 +259,7 @@ impl App {
         let lut = palette::build_lut(settings.palette);
         spectrogram.set_palette(&gpu.queue, &lut);
         let curves = CurvePass::new(&gpu.device, gpu.config.format);
+        let phosphor = Phosphor::new(&gpu.device, gpu.config.format);
         curves.set_palette(&gpu.queue, &lut);
         let overlay = Overlay::new(&gpu.device, &gpu.queue, gpu.config.format);
         let artwork = ArtworkPass::new(&gpu.device, gpu.config.format, bloom::TARGET_FORMAT);
@@ -339,6 +350,8 @@ impl App {
             brightness: 0.0,
             hue_shift: 0.0,
             scope: (Vec::new(), Vec::new()),
+            phosphor,
+            trace: Vec::new(),
             loudness: sonorant_core::dsp::LoudnessReadings::default(),
             reference: None,
             audio,
@@ -645,7 +658,8 @@ impl Running {
             }
         };
         let now = Instant::now();
-        if let Some(interval) = self.pacing.record(now)
+        let since_last = self.pacing.record(now);
+        if let Some(interval) = since_last
             && interval >= STALL
         {
             let ms = |d: Duration| d.as_secs_f64() * 1000.0;
@@ -903,6 +917,7 @@ impl Running {
             brightness_hz: map.x_to_freq(self.brightness * map.width as f64),
             scope_left: &self.scope.0,
             scope_right: &self.scope.1,
+            phosphor: self.phosphor_look().is_some(),
             track: self.now_playing.track(),
             position: self.now_playing.position(now),
             playing: self.now_playing.playing(),
@@ -1062,6 +1077,34 @@ impl Running {
             self.visuals
                 .composite(&self.gpu.queue, &mut pass, if glow { 1.0 } else { 0.0 });
         }
+        // The phosphor fades and gathers before the furniture pass, because it writes
+        // its own render targets and the furniture pass is already open by then.
+        let scope = self.phosphor_look();
+        match &scope {
+            Some(look) => {
+                let square = self.band.deck.goniometer;
+                // The samples that really passed since the last frame, so the figure is
+                // continuous and its brightness does not follow the frame rate.
+                let dt = since_last.map_or(0.0, |d| d.as_secs_f64().min(PHOSPHOR_GAP));
+                let want =
+                    phosphor::samples_for(dt, rate, self.scope.0.len().min(self.scope.1.len()));
+                deck::goniometer_trace(square, &self.scope.0, &self.scope.1, want, &mut self.trace);
+                self.phosphor.accumulate(
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    &mut encoder,
+                    &Sweep {
+                        rect: square,
+                        dt,
+                        look,
+                        points: &self.trace,
+                    },
+                );
+            }
+            // Switched off, or the deck is gone: drop what it was holding so turning it
+            // back on doesn't bring a stale figure with it.
+            None => self.phosphor.clear(),
+        }
         {
             // The furniture over the visuals, blended as GDI+ did (see colour.rs).
             let mut pass = encoder
@@ -1085,6 +1128,11 @@ impl Running {
             self.overlay.draw(Layer::Under, &mut pass);
             self.curves.draw(&mut pass);
             self.overlay.draw(Layer::Over, &mut pass);
+            // Over the goniometer's frame and its guides, which `Layer::Over` just drew.
+            if scope.is_some() {
+                let size = (self.gpu.config.width, self.gpu.config.height);
+                self.phosphor.draw(&self.gpu.queue, &mut pass, size, alpha);
+            }
             // Between the two: over the deck's backing, under the frame the deck
             // draws on Top, which is the order GDI+ painted them in.
             if self.deck_art().w > 0
@@ -1212,6 +1260,27 @@ impl Running {
         } else {
             Rect::EMPTY
         }
+    }
+
+    /// How the goniometer's phosphor screen should look, or `None` when the deck, the
+    /// goniometer or the phosphor itself is switched off and the overlay draws the
+    /// figure the old way.
+    fn phosphor_look(&self) -> Option<PhosphorLook> {
+        let s = &self.settings;
+        if !s.show_center_deck || !s.deck_show_goniometer || !s.deck_phosphor {
+            return None;
+        }
+        if self.band.deck.goniometer.w <= 0 {
+            return None;
+        }
+        Some(PhosphorLook {
+            persistence: f64::from(s.phosphor_ms) / 1000.0,
+            intensity: f64::from(s.phosphor_intensity) / 100.0,
+            // The palette's colour, as the overlay's trace used, so the scope still
+            // belongs to the theme rather than being a fixed CRT green.
+            colour: Rgba::rgb(palette::color_at(&self.lut, 0.80), 255),
+            ..PhosphorLook::default()
+        })
     }
 
     /// How far the backdrop comes forward, from 0 to 1. Nostalgia+ capped the setting

@@ -70,6 +70,22 @@ impl Rgba {
     pub fn to_array(self) -> [f32; 4] {
         [self.r, self.g, self.b, self.a]
     }
+
+    /// The same colour with its parts decoded to linear light, alpha left alone.
+    ///
+    /// For the passes that work in light rather than in encoded values: the phosphor
+    /// accumulator, which adds and fades real light and encodes once at the end. Putting
+    /// an encoded colour in there would be encoded twice over.
+    pub fn to_linear(self) -> [f32; 4] {
+        let decode = |v: f32| {
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        [decode(self.r), decode(self.g), decode(self.b), self.a]
+    }
 }
 
 /// A theme slot's colour if it's set, otherwise `fallback`.

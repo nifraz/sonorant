@@ -221,9 +221,16 @@ fn every_setting_survives_a_save_and_load() {
     let a = serde_json::to_value(&mutated).unwrap();
     let d = serde_json::to_value(&default).unwrap();
     // Settings with nothing in a Nostalgia+ file to change them: the frame cap, because
-    // TargetFps 67 is still "display", and the two that are new here. The TOML round
-    // trip below still covers all three.
-    let no_counterpart = ["frame_cap", "px_per_row", "smooth_time"];
+    // TargetFps 67 is still "display", and the ones that are new here. The TOML round
+    // trip below still covers all of them.
+    let no_counterpart = [
+        "frame_cap",
+        "px_per_row",
+        "smooth_time",
+        "deck_phosphor",
+        "phosphor_ms",
+        "phosphor_intensity",
+    ];
     for (k, v) in a.as_object().unwrap() {
         if !no_counterpart.contains(&k.as_str()) {
             assert_ne!(v, &d[k], "{k} wasn't changed by the mutated file");
