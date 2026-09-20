@@ -19,6 +19,7 @@ log = { workspace = true }
 
 [dev-dependencies]
 sonorant-testdata = { workspace = true }
+pollster = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,25 +1,20 @@
-// The overlay's shapes: filled rectangles, gradients and anti-aliased line segments,
-// in framebuffer pixels.
+// The overlay's shapes: filled rectangles, gradients and anti-aliased line segments.
 //
-// A vertex with a zero half-width belongs to a plain fill. Otherwise it belongs to a
-// quad drawn round a segment, and each pixel covers as much as its distance to the
-// segment allows, so a line at any angle is anti-aliased.
+// Positions arrive in clip space, worked out when the shape was queued, with the pixel
+// position alongside so a line can measure how much of each pixel it covers. A vertex
+// with a zero half-width belongs to a plain fill; otherwise it belongs to a quad drawn
+// round a segment, and each pixel takes as much colour as its distance to that segment
+// allows, so a line at any angle is anti-aliased.
 //
 // Colours are sRGB-encoded with straight alpha and blended as such (see colour.rs).
 
-struct Screen {
-    size: vec2<f32>,
-    _pad: vec2<f32>,
-};
-
-@group(0) @binding(0) var<uniform> screen: Screen;
-
 struct VertexIn {
-    @location(0) pos: vec2<f32>,
-    @location(1) colour: vec4<f32>,
-    // The segment's ends, for lines.
-    @location(2) segment: vec4<f32>,
-    @location(3) half_width: f32,
+    @location(0) clip: vec2<f32>,
+    @location(1) pos: vec2<f32>,
+    @location(2) colour: vec4<f32>,
+    // The segment's ends in pixels, for lines.
+    @location(3) segment: vec4<f32>,
+    @location(4) half_width: f32,
 };
 
 struct VertexOut {
@@ -33,7 +28,7 @@ struct VertexOut {
 @vertex
 fn vs_main(v: VertexIn) -> VertexOut {
     var out: VertexOut;
-    out.clip = vec4<f32>(v.pos.x / screen.size.x * 2.0 - 1.0, 1.0 - v.pos.y / screen.size.y * 2.0, 0.0, 1.0);
+    out.clip = vec4<f32>(v.clip, 0.0, 1.0);
     out.colour = v.colour;
     out.segment = v.segment;
     out.half_width = v.half_width;

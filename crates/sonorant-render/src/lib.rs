@@ -2,6 +2,7 @@
 
 pub mod axes;
 pub mod band;
+pub mod bloom;
 pub mod colour;
 pub mod curves;
 pub mod deck;
@@ -10,8 +11,10 @@ pub mod layout;
 pub mod overlay;
 pub mod readback;
 pub mod spectrogram;
+pub mod timing;
 
 pub use band::{BandLayout, DeckLayout};
+pub use bloom::Visuals;
 pub use colour::Rgba;
 pub use curves::{CurveData, CurveLook, CurvePass, CurveView};
 pub use deck::{DeckState, TrackInfo, WaveRing};
@@ -20,3 +23,4 @@ pub use layout::{PaneLayout, Rect, ScopeLayout};
 pub use overlay::{Face, Layer, Overlay};
 pub use readback::Readback;
 pub use spectrogram::{PaneView, SpectrogramPass};
+pub use timing::GpuTimer;

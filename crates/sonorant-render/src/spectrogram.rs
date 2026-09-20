@@ -24,6 +24,8 @@ struct PaneUniform {
     scale: u32,
     fmin: f32,
     fmax: f32,
+    grid_at: f32,
+    grid_span: f32,
     grid_bins: u32,
     grid_fmin: f32,
     grid_fmax: f32,
@@ -31,7 +33,7 @@ struct PaneUniform {
     smooth_time: u32,
     floor_db: f32,
     ceiling_db: f32,
-    _pad: [u32; 2],
+    _pad: [u32; 4],
 }
 
 /// How one pane is drawn.
@@ -260,7 +262,14 @@ impl SpectrogramPass {
             }
             _ => (history.newest_slot(), history.available()),
         };
+        let grid_decades = (GRID_FMAX / GRID_FMIN).ln();
         for (i, p) in panes.iter().take(MAX_PANES).enumerate() {
+            // pos = log(f / grid_fmin) / log(grid_fmax / grid_fmin) * bins - 0.5, with
+            // f = fmin (fmax/fmin)^v, which is linear in v.
+            let (fmin, fmax) = (p.fmin.max(1e-3) as f64, p.fmax.max(1e-3) as f64);
+            let bins = GRID_BINS as f64;
+            let grid_at = (fmin / GRID_FMIN).ln() / grid_decades * bins - 0.5;
+            let grid_span = (fmax / fmin).ln() / grid_decades * bins;
             let (global, floor, ceiling) = match p.global_range {
                 Some((f, c)) => (1, f, c),
                 None => (0, 0.0, 0.0),
@@ -277,6 +286,8 @@ impl SpectrogramPass {
                 scale: (p.scale != FreqScale::Linear) as u32,
                 fmin: p.fmin,
                 fmax: p.fmax,
+                grid_at: grid_at as f32,
+                grid_span: grid_span as f32,
                 grid_bins: GRID_BINS as u32,
                 grid_fmin: GRID_FMIN as f32,
                 grid_fmax: GRID_FMAX as f32,
@@ -284,7 +295,7 @@ impl SpectrogramPass {
                 smooth_time: p.smooth_time as u32,
                 floor_db: floor,
                 ceiling_db: ceiling,
-                _pad: [0; 2],
+                _pad: [0; 4],
             };
             queue.write_buffer(
                 &self.uniforms,

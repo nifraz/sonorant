@@ -9,9 +9,9 @@ use sonorant_core::runtime::PaneCurves;
 use sonorant_core::settings::{CurveStyle, Settings};
 use sonorant_core::store::{self, Store};
 use sonorant_render::{
-    BandLayout, CurveData, CurveLook, CurvePass, CurveView, DeckState, HistoryStore, Layer,
-    Overlay, PaneView, Readback, Rect, RowIn, ScopeLayout, SpectrogramPass, TrackInfo, WaveRing,
-    axes, deck,
+    BandLayout, CurveData, CurveLook, CurvePass, CurveView, DeckState, GpuTimer, HistoryStore,
+    Layer, Overlay, PaneView, Readback, Rect, RowIn, ScopeLayout, SpectrogramPass, TrackInfo,
+    Visuals, WaveRing, axes, bloom, deck,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
@@ -66,6 +66,10 @@ struct Running {
     egui_renderer: egui_wgpu::Renderer,
     history: HistoryStore,
     spectrogram: SpectrogramPass,
+    /// The visuals' floating-point target and its glow.
+    visuals: Visuals,
+    /// What each pass costs on the GPU.
+    timer: GpuTimer,
     curves: CurvePass,
     overlay: Overlay,
     lut: Lut,
@@ -73,9 +77,13 @@ struct Running {
     latest: Vec<PaneCurves>,
     range: (f64, f64),
     analysis: f64,
+    /// How much of the last onset is left, 1 at the beat and decaying.
+    pulse: f64,
     bpm: f64,
     /// The spectral centroid, 0 to 1 along the display axis.
     brightness: f64,
+    /// Degrees the palette is currently rotated by.
+    hue_shift: f64,
     scope: (Vec<f32>, Vec<f32>),
     loudness: sonorant_core::dsp::LoudnessReadings,
     /// The average spectrum of each pane when the reference was taken, drawn in amber
@@ -178,13 +186,27 @@ impl App {
         // Five minutes at the settings' scroll speed.
         let rows = (settings.rows_per_second.max(1.0) * 300.0) as u32;
         let history = HistoryStore::new(&gpu.device, GRID_BINS as u32, rows);
-        let mut spectrogram = SpectrogramPass::new(&gpu.device, gpu.view_format);
+        let mut spectrogram = SpectrogramPass::new(&gpu.device, bloom::TARGET_FORMAT);
         spectrogram.bind(&gpu.device, &history);
         let lut = palette::build_lut(settings.palette);
         spectrogram.set_palette(&gpu.queue, &lut);
         let curves = CurvePass::new(&gpu.device, gpu.config.format);
         curves.set_palette(&gpu.queue, &lut);
         let overlay = Overlay::new(&gpu.device, &gpu.queue, gpu.config.format);
+        let visuals = Visuals::new(
+            &gpu.device,
+            gpu.view_format,
+            gpu.config.width,
+            gpu.config.height,
+        );
+        let timer = GpuTimer::new(
+            &gpu.device,
+            &gpu.queue,
+            &["visuals", "glow", "composite", "furniture", "ui"],
+        );
+        if !timer.is_available() {
+            log::info!("this GPU has no timestamp queries; pass times won't be shown");
+        }
         steps.mark("renderer");
 
         let audio = match opening.join() {
@@ -231,14 +253,18 @@ impl App {
             egui_renderer,
             history,
             spectrogram,
+            visuals,
+            timer,
             curves,
             overlay,
             lut,
             latest: Vec::new(),
             range: (-95.0, -5.0),
             analysis: 0.0,
+            pulse: 0.0,
             bpm: 0.0,
             brightness: 0.0,
+            hue_shift: 0.0,
             scope: (Vec::new(), Vec::new()),
             loudness: sonorant_core::dsp::LoudnessReadings::default(),
             reference: None,
@@ -267,6 +293,15 @@ impl App {
         let Some(r) = &self.running else { return };
         let overall = r.pacing.overall();
         log::info!("frame pacing: {overall}");
+        if r.timer.is_available() {
+            log::info!(
+                "GPU time: {:.2} ms a frame at {}x{} ({})",
+                r.timer.total_ms(),
+                r.gpu.config.width,
+                r.gpu.config.height,
+                r.timer.report()
+            );
+        }
         if let Some(counts) = r.presented.counts() {
             log::info!("presentation: {counts}");
         }
@@ -397,6 +432,8 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
                 r.gpu.resize(size.width, size.height);
+                r.visuals
+                    .resize(&r.gpu.device, r.gpu.config.width, r.gpu.config.height);
                 r.window.request_redraw();
             }
             WindowEvent::Occluded(occluded) => {
@@ -419,6 +456,9 @@ impl ApplicationHandler<UserEvent> for App {
             } if !response.consumed => match logical_key {
                 Key::Named(NamedKey::Space) => r.ui.frozen = !r.ui.frozen,
                 Key::Character(c) if c.eq_ignore_ascii_case("a") => r.toggle_reference(),
+                Key::Character(c) if c.eq_ignore_ascii_case("i") => {
+                    r.settings.immersive = !r.settings.immersive
+                }
                 Key::Character(c) if c.eq_ignore_ascii_case("b") => {
                     r.settings.style = match r.settings.style {
                         CurveStyle::Line => CurveStyle::Bars,
@@ -547,6 +587,7 @@ impl Running {
             self.latest.clone_from(&s.panes);
             self.range = (s.floor_db, s.ceiling_db);
             self.analysis = s.analysis_seconds;
+            self.pulse = s.pulse;
             self.bpm = s.bpm;
             self.brightness = s.centroid;
             self.scope.0.clone_from(&s.scope_left);
@@ -645,6 +686,7 @@ impl Running {
             .collect();
         self.spectrogram
             .prepare(&self.gpu.queue, &self.history, &panes, self.held);
+        self.update_hue();
         self.prepare_curves();
         self.overlay
             .begin(self.gpu.config.width, self.gpu.config.height);
@@ -701,6 +743,9 @@ impl Running {
             },
         };
         axes::draw(&mut self.overlay, &scales);
+        if self.settings.immersive && self.settings.imm_beat_reactive {
+            deck::draw_beat_flare(&mut self.overlay, client, &self.lut, self.pulse);
+        }
         let state = DeckState {
             loudness: &self.loudness,
             bpm: self.bpm,
@@ -768,13 +813,16 @@ impl Running {
         let plain = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        // The visuals go through the floating-point target, so the glow has room to
+        // work in before everything is tonemapped onto the screen.
+        let glow = self.settings.immersive && self.settings.glow;
         {
             let bg = palette::background(&self.lut);
             let mut pass = encoder
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("visuals"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &linear,
+                        view: self.visuals.view(),
                         depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {
@@ -788,12 +836,38 @@ impl Running {
                         },
                     })],
                     depth_stencil_attachment: None,
-                    timestamp_writes: None,
+                    timestamp_writes: self.timer.writes(0),
                     occlusion_query_set: None,
                     multiview_mask: None,
                 })
                 .forget_lifetime();
             self.spectrogram.draw(&mut pass, &panes);
+        }
+        if glow {
+            self.visuals
+                .build_glow(&self.gpu.queue, &mut encoder, self.timer.writes(1));
+        }
+        {
+            let mut pass = encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("composite"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &linear,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: self.timer.writes(2),
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                })
+                .forget_lifetime();
+            self.visuals
+                .composite(&self.gpu.queue, &mut pass, if glow { 1.0 } else { 0.0 });
         }
         {
             // The furniture over the visuals, blended as GDI+ did (see colour.rs).
@@ -810,7 +884,7 @@ impl Running {
                         },
                     })],
                     depth_stencil_attachment: None,
-                    timestamp_writes: None,
+                    timestamp_writes: self.timer.writes(3),
                     occlusion_query_set: None,
                     multiview_mask: None,
                 })
@@ -834,13 +908,14 @@ impl Running {
                         },
                     })],
                     depth_stencil_attachment: None,
-                    timestamp_writes: None,
+                    timestamp_writes: self.timer.writes(4),
                     occlusion_query_set: None,
                     multiview_mask: None,
                 })
                 .forget_lifetime();
             self.egui_renderer.render(&mut pass, &paint_jobs, &screen);
         }
+        self.timer.resolve(&mut encoder);
         let shot = match &self.screenshot {
             Some((_, after)) if self.started.elapsed() >= *after => Some(Readback::record(
                 &self.gpu.device,
@@ -864,6 +939,7 @@ impl Running {
             self.ui.quit = true;
         }
         self.overlay.finish();
+        self.timer.poll();
         self.last_work = now.elapsed();
         self.presented.sample(&self.gpu.surface);
         if let Some(mut steps) = self.steps.take() {
@@ -907,6 +983,9 @@ impl Running {
         let (frames, rows) = self.status.dropped;
         if frames > 0 || rows > 0 {
             line += &format!("  |  dropped {frames} frames, {rows} rows");
+        }
+        if self.timer.is_available() {
+            line += &format!("  |  GPU {:.1} ms", self.timer.total_ms());
         }
         if self.ui.frozen {
             line += "  |  FROZEN";
@@ -958,6 +1037,28 @@ impl Running {
             .prepare(&self.gpu.device, &self.gpu.queue, &look, &strips);
     }
 
+    /// Rebuilds the palette when the music's brightness has moved far enough to see.
+    ///
+    /// Nostalgia+ left the columns already drawn in the hue they were pushed with, so
+    /// the image carried its own recent history in colour. Here the shader colours the
+    /// whole history from one palette, so a drift recolours all of it at once, as a
+    /// palette change does.
+    fn update_hue(&mut self) {
+        let want = if self.settings.immersive && self.settings.imm_colour_follows {
+            (self.brightness - 0.5) * 2.0 * self.settings.colour_follow_degrees as f64
+        } else {
+            0.0
+        };
+        // A degree either way is invisible, and rebuilding the table isn't free.
+        if (want - self.hue_shift).abs() < 1.0 {
+            return;
+        }
+        self.hue_shift = want;
+        self.lut = palette::build_lut_shifted(self.settings.palette, want);
+        self.spectrogram.set_palette(&self.gpu.queue, &self.lut);
+        self.curves.set_palette(&self.gpu.queue, &self.lut);
+    }
+
     /// Holds each pane's average spectrum as an amber reference, or drops the one held.
     fn toggle_reference(&mut self) {
         self.reference = match self.reference {
@@ -980,6 +1081,7 @@ impl Running {
         }
         if new.palette != old.palette {
             self.settings.palette = new.palette;
+            self.hue_shift = 0.0;
             self.lut = palette::build_lut(new.palette);
             self.spectrogram.set_palette(&self.gpu.queue, &self.lut);
             self.curves.set_palette(&self.gpu.queue, &self.lut);

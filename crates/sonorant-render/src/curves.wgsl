@@ -87,14 +87,31 @@ fn segment_distance(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
 // Distance from `p` to a series' polyline, which has a point at the centre of every
 // row. Only the segments within two rows can be nearer than a line is wide.
 fn polyline_distance(s: u32, p: vec2<f32>, row: i32) -> f32 {
-    var d = 1e9;
     let top = c.rect.y + 0.5;
-    for (var y = row - 2; y <= row + 1; y++) {
+    // The segments near this row, and the span of x they cover: a pixel outside that
+    // span by more than a line's width can't be covered, and most pixels are.
+    var lo = 1e9;
+    var hi = -1e9;
+    var xs = array<f32, 4>(0.0, 0.0, 0.0, 0.0);
+    for (var k = 0; k < 4; k++) {
+        let y = clamp(row - 2 + k, 0, i32(c.n) - 1);
+        let x = x_for(value(s, y));
+        xs[k] = x;
+        lo = min(lo, x);
+        hi = max(hi, x);
+    }
+    let reach = c.line_width * 0.5 + 1.0;
+    if (p.x < lo - reach || p.x > hi + reach) {
+        return 1e9;
+    }
+    var d = 1e9;
+    for (var k = 0; k < 3; k++) {
+        let y = row - 2 + k;
         if (y < 0 || y + 1 >= i32(c.n)) {
             continue;
         }
-        let a = vec2<f32>(x_for(value(s, y)), top + f32(y));
-        let b = vec2<f32>(x_for(value(s, y + 1)), top + f32(y + 1));
+        let a = vec2<f32>(xs[k], top + f32(y));
+        let b = vec2<f32>(xs[k + 1], top + f32(y + 1));
         d = min(d, segment_distance(p, a, b));
     }
     return d;

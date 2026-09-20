@@ -80,6 +80,9 @@ pub struct TextSize {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
 struct Vertex {
+    /// Clip space, worked out when the shape is queued.
+    clip: [f32; 2],
+    /// The same point in pixels, for the line coverage.
     pos: [f32; 2],
     colour: [f32; 4],
     segment: [f32; 4],
@@ -110,8 +113,6 @@ struct Placed {
 
 pub struct Overlay {
     pipeline: wgpu::RenderPipeline,
-    screen: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
     vertex_buffer: wgpu::Buffer,
     vertex_capacity: u64,
     shapes: [Vec<Vertex>; LAYERS],
@@ -140,40 +141,13 @@ impl std::fmt::Debug for Overlay {
 impl Overlay {
     /// An overlay drawing into `target`, the swapchain's plain (non-sRGB) format.
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, target: wgpu::TextureFormat) -> Overlay {
-        let screen = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("overlay screen"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("overlay"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(16),
-                },
-                count: None,
-            }],
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("overlay"),
-            layout: &layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: screen.as_entire_binding(),
-            }],
-        });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("overlay"),
             source: wgpu::ShaderSource::Wgsl(include_str!("overlay.wgsl").into()),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("overlay"),
-            bind_group_layouts: &[Some(&layout)],
+            bind_group_layouts: &[],
             immediate_size: 0,
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -187,7 +161,8 @@ impl Overlay {
                     array_stride: size_of::<Vertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x2, 1 => Float32x4, 2 => Float32x4, 3 => Float32
+                        0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32x4,
+                        4 => Float32
                     ],
                 })],
             },
@@ -225,8 +200,6 @@ impl Overlay {
 
         Overlay {
             pipeline,
-            screen,
-            bind_group,
             vertex_buffer,
             vertex_capacity,
             shapes: Default::default(),
@@ -275,11 +248,7 @@ impl Overlay {
         if w <= 0.0 || h <= 0.0 || (left.a <= 0.0 && right.a <= 0.0) {
             return;
         }
-        let v = |px: f32, py: f32, c: Rgba| Vertex {
-            pos: [px, py],
-            colour: c.to_array(),
-            ..Vertex::default()
-        };
+        let v = |px: f32, py: f32, c: Rgba| self.vertex(px, py, c);
         let (x1, y1) = (x + w, y + h);
         self.shapes[layer as usize].extend([
             v(x, y, left),
@@ -291,16 +260,39 @@ impl Overlay {
         ]);
     }
 
+    /// A rectangle shading from `top` at its top edge to `bottom` at its bottom.
+    #[allow(clippy::too_many_arguments)]
+    pub fn gradient_v(
+        &mut self,
+        layer: Layer,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        top: Rgba,
+        bottom: Rgba,
+    ) {
+        if w <= 0.0 || h <= 0.0 || (top.a <= 0.0 && bottom.a <= 0.0) {
+            return;
+        }
+        let v = |px: f32, py: f32, c: Rgba| self.vertex(px, py, c);
+        let (x1, y1) = (x + w, y + h);
+        self.shapes[layer as usize].extend([
+            v(x, y, top),
+            v(x1, y, top),
+            v(x, y1, bottom),
+            v(x, y1, bottom),
+            v(x1, y, top),
+            v(x1, y1, bottom),
+        ]);
+    }
+
     /// A filled triangle through three pixel positions.
     pub fn triangle(&mut self, layer: Layer, points: [(f32, f32); 3], colour: Rgba) {
         if colour.a <= 0.0 {
             return;
         }
-        self.shapes[layer as usize].extend(points.map(|(x, y)| Vertex {
-            pos: [x, y],
-            colour: colour.to_array(),
-            ..Vertex::default()
-        }));
+        self.shapes[layer as usize].extend(points.map(|(x, y)| self.vertex(x, y, colour)));
     }
 
     /// A one-pixel horizontal line across pixel row `y`, from column `x0` up to `x1`.
@@ -346,16 +338,27 @@ impl Overlay {
         let (nx, ny) = (-uy, ux);
         let segment = [x0, y0, x1, y1];
         let v = |px: f32, py: f32| Vertex {
-            pos: [px, py],
-            colour: colour.to_array(),
             segment,
             half_width: half,
+            ..self.vertex(px, py, colour)
         };
         let a = v(x0 - ux + nx, y0 - uy + ny);
         let b = v(x1 + ux + nx, y1 + uy + ny);
         let c = v(x0 - ux - nx, y0 - uy - ny);
         let d = v(x1 + ux - nx, y1 + uy - ny);
         self.shapes[layer as usize].extend([a, b, c, c, b, d]);
+    }
+
+    /// A vertex at a pixel position, in clip space as the shader wants it.
+    fn vertex(&self, x: f32, y: f32, colour: Rgba) -> Vertex {
+        let [w, h] = self.size;
+        Vertex {
+            clip: [x / w as f32 * 2.0 - 1.0, 1.0 - y / h as f32 * 2.0],
+            pos: [x, y],
+            colour: colour.to_array(),
+            segment: [0.0; 4],
+            half_width: 0.0,
+        }
     }
 
     /// The size `text` takes in `face` at `size` pixels.
@@ -445,11 +448,6 @@ impl Overlay {
     /// Uploads the frame's shapes and lays out its text. Call before the render pass.
     pub fn prepare(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let [w, h] = self.size;
-        queue.write_buffer(
-            &self.screen,
-            0,
-            bytemuck::cast_slice(&[w as f32, h as f32, 0.0, 0.0]),
-        );
         let total: usize = self.shapes.iter().map(Vec::len).sum();
         if total as u64 > self.vertex_capacity {
             self.vertex_capacity = (total as u64).next_power_of_two();
@@ -521,7 +519,6 @@ impl Overlay {
         let range = self.ranges[layer as usize].clone();
         if !range.is_empty() {
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.bind_group, &[]);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             pass.draw(range, 0..1);
         }

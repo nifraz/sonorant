@@ -27,6 +27,10 @@ struct Pane {
     scale: u32,
     fmin: f32,
     fmax: f32,
+    // On a log axis the grid position is `grid_at + v * grid_span`, worked out on the
+    // CPU; a linear axis takes the logarithm here instead.
+    grid_at: f32,
+    grid_span: f32,
     // The grid the history is stored on.
     grid_bins: u32,
     grid_fmin: f32,
@@ -39,6 +43,8 @@ struct Pane {
     ceiling_db: f32,
     _pad0: u32,
     _pad1: u32,
+    _pad2: u32,
+    _pad3: u32,
 };
 
 @group(0) @binding(0) var<uniform> pane: Pane;
@@ -106,12 +112,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let age = across * pane.visible_rows + (1.0 - pane.frac);
 
     let v = 1.0 - in.uv.y;
-    var f = pane.fmin + (pane.fmax - pane.fmin) * v;
-    if (pane.scale == 1u) {
-        f = pane.fmin * pow(pane.fmax / pane.fmin, v);
+    var pos = pane.grid_at + v * pane.grid_span;
+    if (pane.scale == 0u) {
+        let f = pane.fmin + (pane.fmax - pane.fmin) * v;
+        pos = (log(max(f, 1e-3) / pane.grid_fmin) / log(pane.grid_fmax / pane.grid_fmin))
+            * f32(pane.grid_bins) - 0.5;
     }
-    let pos = log(max(f, 1e-3) / pane.grid_fmin) / log(pane.grid_fmax / pane.grid_fmin)
-        * f32(pane.grid_bins) - 0.5;
 
     var t = 0.0;
     let a0 = i32(floor(age));

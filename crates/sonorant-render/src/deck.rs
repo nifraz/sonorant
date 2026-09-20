@@ -828,6 +828,32 @@ pub fn draw_colour_bar(
     );
 }
 
+/// A flare along the view's edges on each onset: four gradient bars rather than a
+/// vignette, because the edges are where the eye catches movement without being pulled
+/// off the analysis. The band recedes as well as fades, so a decaying beat costs less
+/// to draw and reads as a flare rather than a light being dimmed.
+pub fn draw_beat_flare(o: &mut Overlay, client: Rect, lut: &Lut, pulse: f64) {
+    if pulse <= 0.02 {
+        return;
+    }
+    let band = ((client.h / 22).clamp(20, 48) as f64 * (0.35 + 0.65 * pulse)) as i32;
+    if band < 6 {
+        return;
+    }
+    let alpha = (pulse * 90.0) as u8;
+    if alpha < 2 {
+        return;
+    }
+    let hot = Rgba::rgb(palette::color_at(lut, 0.9), alpha);
+    let gone = hot.with_alpha(0);
+    let (x, y) = (client.x as f32, client.y as f32);
+    let (w, h, b) = (client.w as f32, client.h as f32, band as f32);
+    o.gradient_v(Layer::Top, x, y, w, b, hot, gone);
+    o.gradient_v(Layer::Top, x, y + h - b, w, b, gone, hot);
+    o.gradient(Layer::Top, x, y, b, h, hot, gone);
+    o.gradient(Layer::Top, x + w - b, y, b, h, gone, hot);
+}
+
 /// The status line over the top-left of the image.
 pub fn draw_status(o: &mut Overlay, s: &Settings, text: &str, top: f32, alpha: f64, px: f32) {
     if alpha <= 0.004 {

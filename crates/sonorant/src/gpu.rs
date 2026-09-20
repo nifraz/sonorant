@@ -107,9 +107,13 @@ impl Gpu {
             adapter_info.driver_info
         );
 
+        // Timestamp queries where they exist: the status line reports what each pass
+        // costs, which is what the frame budget is measured against.
+        let timing = adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("sonorant"),
             required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+            required_features: timing,
             ..Default::default()
         }))
         .map_err(|e| format!("cannot open the GPU: {e}"))?;
