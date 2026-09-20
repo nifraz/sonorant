@@ -20,7 +20,7 @@ use crate::media::{Controls, Follow, Player, Transport};
 use crate::palette::PaletteKind;
 use crate::settings::{
     AxisLabelMode, CameraView, CurveStyle, Flag, FrameCap, GraphBackground, Number, Preset,
-    ScaleLanePosition, Settings,
+    RenderQuality, ScaleLanePosition, Settings,
 };
 
 /// What capture listens to.
@@ -88,6 +88,7 @@ pub enum Choice {
     Interp(CurveInterpolation),
     Filter(FilteringAmount),
     Quality(AnalysisQuality),
+    Render(RenderQuality),
     Window(WindowType),
     Aggregate(BandAggregate),
     Background(GraphBackground),
@@ -134,6 +135,7 @@ impl Choice {
                 AnalysisQuality::High => "High",
                 AnalysisQuality::LowLatency => "Low latency",
             },
+            Choice::Render(q) => q.name(),
             Choice::Window(w) => match w {
                 WindowType::Hann => "Hann",
                 WindowType::Hamming => "Hamming",
@@ -179,6 +181,7 @@ impl Choice {
             Choice::Interp(v) => s.interp == v,
             Choice::Filter(v) => s.filter == v,
             Choice::Quality(v) => s.quality == v,
+            Choice::Render(v) => s.render_quality == v,
             Choice::Window(v) => s.window == v,
             Choice::Aggregate(v) => s.aggregate == v,
             Choice::Background(v) => s.background == v,
@@ -197,6 +200,7 @@ impl Choice {
             Choice::Interp(v) => s.interp = v,
             Choice::Filter(v) => s.filter = v,
             Choice::Quality(v) => s.quality = v,
+            Choice::Render(v) => s.render_quality = v,
             Choice::Window(v) => s.window = v,
             Choice::Aggregate(v) => s.aggregate = v,
             Choice::Background(v) => s.background = v,
@@ -964,6 +968,14 @@ fn spectrogram(s: &Settings) -> Vec<Item> {
             s,
         ),
         Item::separator(),
+        choices(
+            "Visual quality",
+            "How much work the waterfall, the glow and the backdrop may do",
+            RenderQuality::ALL.iter().copied(),
+            Choice::Render,
+            "Lower is cheaper on a weak GPU; Medium is what the app has always drawn",
+            s,
+        ),
         flag(
             "Waterfall",
             "Draw the history as a landscape, with a camera you can orbit",

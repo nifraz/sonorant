@@ -59,6 +59,15 @@ named_enum! {
 }
 
 named_enum! {
+    /// How much work the new visuals are allowed to do.
+    ///
+    /// Three things scale with it, and only three, because they are the three that cost
+    /// anything measurable: the waterfall's mesh, the glow's chain and the backdrop's
+    /// detail. Medium is what the app has always drawn, so choosing it changes nothing.
+    RenderQuality { Low = "Low", Medium = "Medium", High = "High" } default Medium
+}
+
+named_enum! {
     /// Where the waterfall's camera is put when one of its presets is chosen.
     ///
     /// A place to start or come back to, not a mode: dragging moves the camera away
@@ -332,6 +341,9 @@ pub struct Settings {
     pub deck_height_px: i32,
     /// Draw the history as a landscape instead of as two flat panes.
     pub waterfall: bool,
+    /// How much work the new visuals may do: the waterfall's mesh, the glow's chain and
+    /// the backdrop's detail.
+    pub render_quality: RenderQuality,
     pub deck_show_goniometer: bool,
     /// Draw the goniometer as a phosphor screen: the light fades with real time rather
     /// than with the frame, so a sweep leaves a tail and a held note burns in.
@@ -450,6 +462,7 @@ impl Default for Settings {
             show_center_deck: true,
             deck_height_px: 120,
             waterfall: false,
+            render_quality: RenderQuality::Medium,
             deck_show_goniometer: true,
             deck_phosphor: true,
             curve_phosphor: false,

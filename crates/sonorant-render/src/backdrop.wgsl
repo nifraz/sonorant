@@ -27,6 +27,9 @@ struct Field {
     strength: f32,
     // 0 when the beat is switched off, and the field only drifts.
     reactive: f32,
+    // How many ridges the field is made of: two, three or four.
+    ridges: u32,
+    _pad: u32,
 };
 
 @group(0) @binding(0) var<uniform> field: Field;
@@ -54,11 +57,19 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {
 // brightens and dims, which is exactly the haze this is shaped to avoid. These put two
 // or three bands across the screen each, so the crests are somewhere rather than
 // everywhere.
-fn drift(p: vec2<f32>, t: f32) -> f32 {
+fn drift(p: vec2<f32>, t: f32, ridges: u32) -> f32 {
     var f = sin(p.x * 15.1 + t * 0.23);
     f += sin((p.x * 4.3 + p.y * 12.2) - t * 0.17);
-    f += sin((p.y * 18.0 - p.x * 6.7) + t * 0.31);
-    return f / 3.0 * 0.5 + 0.5;
+    var n = 2.0;
+    if (ridges >= 3u) {
+        f += sin((p.y * 18.0 - p.x * 6.7) + t * 0.31);
+        n = 3.0;
+    }
+    if (ridges >= 4u) {
+        f += sin((p.x * 24.5 + p.y * 9.1) - t * 0.41);
+        n = 4.0;
+    }
+    return f / n * 0.5 + 0.5;
 }
 
 @fragment
@@ -71,7 +82,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Only the crests of the field light up, and the rest of the window stays dark.
     // An even wash over everything is haze, and haze is what the axis labels and the
     // analysis would then have to be read through; bands of light are ground.
-    var v = smoothstep(0.40, 0.95, drift(p, field.time)) * 0.6;
+    var v = smoothstep(0.40, 0.95, drift(p, field.time, field.ridges)) * 0.6;
 
     // Rings leaving the centre, one a beat. The sharp edge leads and the light trails
     // inside it, which is what makes it read as something travelling outwards rather

@@ -230,6 +230,7 @@ fn every_setting_survives_a_save_and_load() {
         "deck_phosphor",
         "curve_phosphor",
         "waterfall",
+        "render_quality",
         "history_minutes",
         "phosphor_ms",
         "phosphor_intensity",

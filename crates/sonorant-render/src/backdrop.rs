@@ -15,6 +15,8 @@ use bytemuck::{Pod, Zeroable};
 
 use crate::colour::Rgba;
 
+/// How many ridges the field is made of, at each visual quality.
+pub const RIDGES: [u32; 3] = [2, 3, 4];
 /// How much of the way an onset pulls the phase back to the downbeat. All the way would
 /// jump on every stray hit; a quarter locks on within a few beats and rides through one
 /// the detector missed.
@@ -76,6 +78,9 @@ pub struct FieldView {
     pub strength: f64,
     /// Whether the field answers the beat or only drifts.
     pub reactive: bool,
+    /// How many ridges the field is made of: two, three or four, by visual quality.
+    /// Fewer is a plainer field as well as a cheaper one.
+    pub ridges: u32,
     /// The palette's deep and hot colours.
     pub deep: Rgba,
     pub hot: Rgba,
@@ -93,6 +98,12 @@ struct FieldUniform {
     brightness: f32,
     strength: f32,
     reactive: f32,
+    ridges: u32,
+    /// WGSL rounds a struct up to its own alignment, which the two `vec4`s make 16, so
+    /// the shader's idea of this is 80 bytes whatever Rust packs it into. Getting that
+    /// wrong is a pipeline that will not create rather than a picture that looks odd,
+    /// but only once something is drawn, so the test below says the number out loud.
+    _pad: [u32; 3],
 }
 
 #[derive(Debug)]
@@ -195,6 +206,8 @@ impl BackdropPass {
             brightness: view.brightness.clamp(0.0, 1.0) as f32,
             strength: view.strength.clamp(0.0, 1.0) as f32,
             reactive: f32::from(u8::from(view.reactive)),
+            ridges: view.ridges.clamp(2, 4),
+            _pad: [0; 3],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
         pass.set_pipeline(&self.pipeline);
@@ -206,6 +219,12 @@ impl BackdropPass {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_uniform_matches_the_shader_layout() {
+        assert_eq!(size_of::<FieldUniform>(), 80);
+        assert_eq!(size_of::<FieldUniform>() % 16, 0);
+    }
 
     /// Between onsets the phase is the tempo and nothing else: a beat at 120 takes half
     /// a second to come round.

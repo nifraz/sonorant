@@ -8,14 +8,14 @@ use sonorant_core::media::Transport;
 use sonorant_core::menu::{self, Capture, Presentation};
 use sonorant_core::palette::{self, Lut};
 use sonorant_core::runtime::PaneCurves;
-use sonorant_core::settings::{FrameCap, Settings};
+use sonorant_core::settings::{FrameCap, RenderQuality, Settings};
 use sonorant_core::store::{self, Store};
 use sonorant_render::{
     ArtworkPass, BackdropPass, BandLayout, BeatPhase, Camera, CurveData, CurveLook, CurvePass,
     CurveView, DeckState, Deposit, FieldView, GpuTimer, HistoryStore, Landscape, Layer, Overlay,
     PaneView, Phosphor, PhosphorLook, QuickBar, Readback, Reading, Readout, Rect, Rgba, RowIn,
-    ScopeLayout, SpectrogramPass, Sweep, Visuals, WaterfallPass, WaveRing, axes, bloom, curves,
-    deck, hover, phosphor, quickbar, waterfall,
+    ScopeLayout, SpectrogramPass, Sweep, Visuals, WaterfallPass, WaveRing, axes, backdrop, bloom,
+    curves, deck, hover, phosphor, quickbar, waterfall,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
@@ -304,7 +304,9 @@ impl App {
         let lut = palette::build_lut(settings.palette);
         spectrogram.set_palette(&gpu.queue, &lut);
         let curves = CurvePass::new(&gpu.device, gpu.config.format);
+        let quality = quality_index(settings.render_quality);
         let mut waterfall = WaterfallPass::new(&gpu.device, bloom::TARGET_FORMAT);
+        waterfall.set_mesh(&gpu.device, waterfall::MESH[quality]);
         waterfall.bind(&gpu.device, &history);
         waterfall.set_palette(&gpu.queue, &lut);
         let backdrop = BackdropPass::new(&gpu.device, bloom::TARGET_FORMAT);
@@ -316,12 +318,13 @@ impl App {
         curves.set_palette(&gpu.queue, &lut);
         let overlay = Overlay::new(&gpu.device, &gpu.queue, gpu.config.format);
         let artwork = ArtworkPass::new(&gpu.device, gpu.config.format, bloom::TARGET_FORMAT);
-        let visuals = Visuals::new(
+        let mut visuals = Visuals::new(
             &gpu.device,
             gpu.view_format,
             gpu.config.width,
             gpu.config.height,
         );
+        visuals.set_divisor(&gpu.device, bloom::GLOW_DIVISORS[quality]);
         let timer = GpuTimer::new(
             &gpu.device,
             &gpu.queue,
@@ -1104,6 +1107,7 @@ impl Running {
         // frame, and is capped rather than believed.
         let dt = since_last.map_or(0.0, |d| d.as_secs_f64().min(PHOSPHOR_GAP));
         let beat_phase = self.beat.advance(dt, self.bpm, self.pulse);
+        let quality = quality_index(self.settings.render_quality);
         // The visuals go through the floating-point target, so the glow has room to
         // work in before everything is tonemapped onto the screen.
         let glow = self.settings.immersive && self.settings.glow;
@@ -1153,6 +1157,7 @@ impl Running {
                         brightness: self.brightness,
                         strength: f64::from(strength),
                         reactive: self.settings.imm_beat_reactive,
+                        ridges: backdrop::RIDGES[quality],
                         deep: Rgba::rgb(palette::color_at(&self.lut, 0.30), 255),
                         hot: Rgba::rgb(palette::color_at(&self.lut, 0.92), 255),
                     },
@@ -1638,6 +1643,20 @@ impl Running {
                 self.view.offset = 0.0;
             }
             self.settle_view();
+        }
+        if self.settings.render_quality != self.applied.render_quality {
+            let q = quality_index(self.settings.render_quality);
+            self.waterfall
+                .set_mesh(&self.gpu.device, waterfall::MESH[q]);
+            self.visuals
+                .set_divisor(&self.gpu.device, bloom::GLOW_DIVISORS[q]);
+            log::info!(
+                "visual quality {}: mesh {:?}, glow at a {}th, {} ridges",
+                self.settings.render_quality.name(),
+                waterfall::MESH[q],
+                bloom::GLOW_DIVISORS[q],
+                backdrop::RIDGES[q],
+            );
         }
         let rows = history_rows(&self.settings);
         if rows != self.history_rows {
@@ -2144,6 +2163,16 @@ fn history_rows(s: &Settings) -> u32 {
         s.effective_rows_per_second().max(1.0) * 60.0 * f64::from(s.history_minutes.clamp(1, 15));
     let affordable = (HISTORY_BUDGET / ROW_BYTES) as f64;
     wanted.min(affordable).max(64.0) as u32
+}
+
+/// Where a visual quality sits in the tables the renderer keeps: the waterfall's mesh,
+/// the glow's chain and the backdrop's ridges are all indexed the same way.
+fn quality_index(q: RenderQuality) -> usize {
+    match q {
+        RenderQuality::Low => 0,
+        RenderQuality::Medium => 1,
+        RenderQuality::High => 2,
+    }
 }
 
 /// The model's name for a backend present mode.

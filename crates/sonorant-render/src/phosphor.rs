@@ -775,6 +775,15 @@ mod tests {
         );
     }
 
+    /// WGSL rounds a struct up to its own alignment, which the two `vec4`s make 16, so
+    /// the shader's idea of this is 80 bytes whatever Rust packs it into. A mismatch is
+    /// a pipeline that will not create, and only once something is drawn.
+    #[test]
+    fn the_uniform_matches_the_shader_layout() {
+        assert_eq!(size_of::<ScopeUniform>(), 80);
+        assert_eq!(size_of::<ScopeUniform>() % 16, 0);
+    }
+
     #[test]
     fn the_fade_does_not_depend_on_how_the_time_is_cut_up() {
         let whole = decay_over(1.0 / 30.0, 0.5);

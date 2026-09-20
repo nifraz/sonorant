@@ -9,8 +9,14 @@ use bytemuck::{Pod, Zeroable};
 
 /// The visuals render in linear light with room above white for the glow to work with.
 pub const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-/// How much smaller the glow chain is than the picture.
-const GLOW_DIVISOR: u32 = 8;
+/// How much smaller the glow chain is than the picture, at each visual quality.
+///
+/// Nostalgia+ built its glow at an eighth, which is Medium and what this has always
+/// drawn. A sixteenth is a quarter of the pixels to threshold and blur, and spreads the
+/// halo wider because the same nine taps cover twice the picture; a sixth is finer and
+/// tighter. Both are a real change to the look as well as the cost, which is the honest
+/// thing for a quality setting to be.
+pub const GLOW_DIVISORS: [u32; 3] = [16, 8, 6];
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
@@ -36,6 +42,7 @@ pub struct Visuals {
     /// Bind groups for the three passes: threshold, the two blurs, and the composite.
     binds: Vec<wgpu::BindGroup>,
     size: (u32, u32),
+    divisor: u32,
 }
 
 impl Visuals {
@@ -132,7 +139,8 @@ impl Visuals {
                 cache: None,
             })
         };
-        let (target, target_view, glow, glow_views) = textures(device, width, height);
+        let divisor = GLOW_DIVISORS[1];
+        let (target, target_view, glow, glow_views) = textures(device, width, height, divisor);
         let mut v = Visuals {
             threshold: pipeline("fs_threshold", TARGET_FORMAT),
             blur: pipeline("fs_blur", TARGET_FORMAT),
@@ -147,6 +155,7 @@ impl Visuals {
             glow_views,
             binds: Vec::new(),
             size: (width.max(1), height.max(1)),
+            divisor,
         };
         v.rebind(device);
         v
@@ -168,7 +177,8 @@ impl Visuals {
             return;
         }
         self.size = size;
-        let (target, target_view, glow, glow_views) = textures(device, size.0, size.1);
+        let (target, target_view, glow, glow_views) =
+            textures(device, size.0, size.1, self.divisor);
         self.target = target;
         self.target_view = target_view;
         self.glow = glow;
@@ -306,10 +316,26 @@ impl Visuals {
         pass.draw(0..3, 0..1);
     }
 
+    /// How small the glow chain is built. Rebuilds it, so only call it when it changes.
+    pub fn set_divisor(&mut self, device: &wgpu::Device, divisor: u32) {
+        let divisor = divisor.clamp(2, 64);
+        if divisor == self.divisor {
+            return;
+        }
+        self.divisor = divisor;
+        let (target, target_view, glow, glow_views) =
+            textures(device, self.size.0, self.size.1, divisor);
+        self.target = target;
+        self.target_view = target_view;
+        self.glow = glow;
+        self.glow_views = glow_views;
+        self.rebind(device);
+    }
+
     fn glow_size(&self) -> (u32, u32) {
         (
-            (self.size.0 / GLOW_DIVISOR).max(8),
-            (self.size.1 / GLOW_DIVISOR).max(8),
+            (self.size.0 / self.divisor).max(8),
+            (self.size.1 / self.divisor).max(8),
         )
     }
 }
@@ -321,7 +347,7 @@ type Targets = (
     [wgpu::TextureView; 2],
 );
 
-fn textures(device: &wgpu::Device, width: u32, height: u32) -> Targets {
+fn textures(device: &wgpu::Device, width: u32, height: u32, divisor: u32) -> Targets {
     let make = |label, w: u32, h: u32| {
         device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
@@ -341,10 +367,7 @@ fn textures(device: &wgpu::Device, width: u32, height: u32) -> Targets {
     let view = |t: &wgpu::Texture| t.create_view(&wgpu::TextureViewDescriptor::default());
     let target = make("visuals", width, height);
     let target_view = view(&target);
-    let (gw, gh) = (
-        (width / GLOW_DIVISOR).max(8),
-        (height / GLOW_DIVISOR).max(8),
-    );
+    let (gw, gh) = ((width / divisor).max(8), (height / divisor).max(8));
     let glow = [make("glow a", gw, gh), make("glow b", gw, gh)];
     let glow_views = [view(&glow[0]), view(&glow[1])];
     (target, target_view, glow, glow_views)

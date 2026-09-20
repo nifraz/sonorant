@@ -304,6 +304,7 @@ impl LegacySettings {
             deck_phosphor: s.deck_phosphor,
             curve_phosphor: s.curve_phosphor,
             waterfall: s.waterfall,
+            render_quality: s.render_quality,
             history_minutes: s.history_minutes,
             phosphor_ms: s.phosphor_ms,
             phosphor_intensity: s.phosphor_intensity,

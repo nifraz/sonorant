@@ -17,7 +17,7 @@ use sonorant_core::engine::{GRID_BINS, GRID_FMAX, GRID_FMIN};
 use sonorant_core::palette::{self, PaletteKind};
 use sonorant_core::settings::{CameraView, Settings};
 use sonorant_render::artwork::{ArtworkPass, Picture};
-use sonorant_render::backdrop::{BackdropPass, FieldView};
+use sonorant_render::backdrop::{self, BackdropPass, FieldView};
 use sonorant_render::band::BandLayout;
 use sonorant_render::bloom::{self, Visuals};
 use sonorant_render::colour::Rgba;
@@ -420,6 +420,7 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue) -> (u32, u32, Vec<u8>) {
                 brightness: 0.55,
                 strength: f64::from(BACKDROP_STRENGTH),
                 reactive: true,
+                ridges: backdrop::RIDGES[1],
                 deep: Rgba::rgb(palette::color_at(&lut, 0.30), 255),
                 hot: Rgba::rgb(palette::color_at(&lut, 0.92), 255),
             },
@@ -1021,6 +1022,7 @@ fn the_backdrop_lights_the_ground_and_rides_the_beat() {
         brightness: 0.5,
         strength,
         reactive,
+        ridges: backdrop::RIDGES[1],
         deep: Rgba::rgb(palette::color_at(&lut, 0.30), 255),
         hot: Rgba::rgb(palette::color_at(&lut, 0.92), 255),
     };
