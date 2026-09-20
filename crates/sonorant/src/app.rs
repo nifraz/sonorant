@@ -11,10 +11,11 @@ use sonorant_core::runtime::PaneCurves;
 use sonorant_core::settings::{FrameCap, Settings};
 use sonorant_core::store::{self, Store};
 use sonorant_render::{
-    ArtworkPass, BandLayout, CurveData, CurveLook, CurvePass, CurveView, DeckState, Deposit,
-    GpuTimer, HistoryStore, Layer, Overlay, PaneView, Phosphor, PhosphorLook, QuickBar, Readback,
-    Reading, Readout, Rect, Rgba, RowIn, ScopeLayout, SpectrogramPass, Sweep, Visuals, WaveRing,
-    axes, bloom, curves, deck, hover, phosphor, quickbar,
+    ArtworkPass, BackdropPass, BandLayout, BeatPhase, CurveData, CurveLook, CurvePass, CurveView,
+    DeckState, Deposit, FieldView, GpuTimer, HistoryStore, Layer, Overlay, PaneView, Phosphor,
+    PhosphorLook, QuickBar, Readback, Reading, Readout, Rect, Rgba, RowIn, ScopeLayout,
+    SpectrogramPass, Sweep, Visuals, WaveRing, axes, bloom, curves, deck, hover, phosphor,
+    quickbar,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
@@ -105,6 +106,9 @@ struct Running {
     /// What each pass costs on the GPU.
     timer: GpuTimer,
     curves: CurvePass,
+    /// The field of light behind the analysis, and where the beat is in it.
+    backdrop: BackdropPass,
+    beat: BeatPhase,
     /// The goniometer's phosphor screen, when the setting has it drawing the figure.
     phosphor: Phosphor,
     /// A phosphor screen per curve strip, when the setting has them drawing the line.
@@ -293,6 +297,7 @@ impl App {
         let lut = palette::build_lut(settings.palette);
         spectrogram.set_palette(&gpu.queue, &lut);
         let curves = CurvePass::new(&gpu.device, gpu.config.format);
+        let backdrop = BackdropPass::new(&gpu.device, bloom::TARGET_FORMAT);
         let phosphor = Phosphor::new(&gpu.device, gpu.config.format);
         let curve_phosphor = [
             Phosphor::new(&gpu.device, gpu.config.format),
@@ -388,6 +393,8 @@ impl App {
             brightness: 0.0,
             hue_shift: 0.0,
             scope: (Vec::new(), Vec::new()),
+            backdrop,
+            beat: BeatPhase::default(),
             phosphor,
             curve_phosphor,
             trace: Vec::new(),
@@ -1065,6 +1072,12 @@ impl Running {
         let plain = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        // How much real time this frame stands for. The backdrop's beat and the
+        // phosphor's fade both run on it rather than on frames, so neither changes with
+        // the frame rate; a gap longer than this was the window being hidden, not a
+        // frame, and is capped rather than believed.
+        let dt = since_last.map_or(0.0, |d| d.as_secs_f64().min(PHOSPHOR_GAP));
+        let beat_phase = self.beat.advance(dt, self.bpm, self.pulse);
         // The visuals go through the floating-point target, so the glow has room to
         // work in before everything is tonemapped onto the screen.
         let glow = self.settings.immersive && self.settings.glow;
@@ -1094,11 +1107,30 @@ impl Running {
                 })
                 .forget_lifetime();
             // Under the analysis, not over it: wherever the spectrogram has data it
-            // covers this, and wherever it hasn't the art shows through.
-            if self.backdrop_strength() > 0.0
-                && let Some(art) = self.now_playing.art()
-            {
-                self.artwork.draw_backdrop(&mut pass, art);
+            // covers this, and wherever it hasn't the ground shows through.
+            let strength = self.backdrop_strength();
+            if strength > 0.0 {
+                if let Some(art) = self.now_playing.art() {
+                    self.artwork.draw_backdrop(&mut pass, art);
+                }
+                // Over the cover and under the analysis, adding light and never taking
+                // any away, so it lifts whatever ground is there rather than replacing
+                // it. With no cover it is the whole backdrop.
+                self.backdrop.draw(
+                    &self.gpu.queue,
+                    &mut pass,
+                    &FieldView {
+                        size: (self.gpu.config.width, self.gpu.config.height),
+                        time: self.started.elapsed().as_secs_f64(),
+                        phase: beat_phase,
+                        pulse: self.pulse,
+                        brightness: self.brightness,
+                        strength: f64::from(strength),
+                        reactive: self.settings.imm_beat_reactive,
+                        deep: Rgba::rgb(palette::color_at(&self.lut, 0.30), 255),
+                        hot: Rgba::rgb(palette::color_at(&self.lut, 0.92), 255),
+                    },
+                );
             }
             self.spectrogram.draw(&mut pass, &panes);
         }
@@ -1130,7 +1162,6 @@ impl Running {
         }
         // The phosphor fades and gathers before the furniture pass, because it writes
         // its own render targets and the furniture pass is already open by then.
-        let dt = since_last.map_or(0.0, |d| d.as_secs_f64().min(PHOSPHOR_GAP));
         let scope = self.phosphor_look();
         match &scope {
             Some(look) => {

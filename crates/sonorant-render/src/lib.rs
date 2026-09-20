@@ -2,6 +2,7 @@
 
 pub mod artwork;
 pub mod axes;
+pub mod backdrop;
 pub mod band;
 pub mod bloom;
 pub mod colour;
@@ -18,6 +19,7 @@ pub mod spectrogram;
 pub mod timing;
 
 pub use artwork::{Artwork, ArtworkPass, Picture};
+pub use backdrop::{BackdropPass, BeatPhase, FieldView};
 pub use band::{BandLayout, DeckLayout};
 pub use bloom::Visuals;
 pub use colour::Rgba;

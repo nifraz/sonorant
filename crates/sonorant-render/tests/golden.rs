@@ -17,6 +17,7 @@ use sonorant_core::engine::{GRID_BINS, GRID_FMAX, GRID_FMIN};
 use sonorant_core::palette::{self, PaletteKind};
 use sonorant_core::settings::Settings;
 use sonorant_render::artwork::{ArtworkPass, Picture};
+use sonorant_render::backdrop::{BackdropPass, FieldView};
 use sonorant_render::band::BandLayout;
 use sonorant_render::bloom::{self, Visuals};
 use sonorant_render::colour::Rgba;
@@ -133,6 +134,7 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue) -> (u32, u32, Vec<u8>) {
         );
     }
 
+    let backdrop = BackdropPass::new(device, bloom::TARGET_FORMAT);
     let mut spectrogram = SpectrogramPass::new(device, bloom::TARGET_FORMAT);
     spectrogram.bind(device, &history);
     spectrogram.set_palette(queue, &lut);
@@ -404,6 +406,23 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue) -> (u32, u32, Vec<u8>) {
             })
             .forget_lifetime();
         artwork.draw_backdrop(&mut pass, &cover);
+        // Over the cover and under the analysis, as the app draws it. Fixed numbers
+        // rather than a clock, so the golden is the same picture every run.
+        backdrop.draw(
+            queue,
+            &mut pass,
+            &FieldView {
+                size: (WIDTH, HEIGHT),
+                time: 12.5,
+                phase: 0.35,
+                pulse: 0.8,
+                brightness: 0.55,
+                strength: f64::from(BACKDROP_STRENGTH),
+                reactive: true,
+                deep: Rgba::rgb(palette::color_at(&lut, 0.30), 255),
+                hot: Rgba::rgb(palette::color_at(&lut, 0.92), 255),
+            },
+        );
         spectrogram.draw(&mut pass, &panes);
     }
     visuals.build_glow(queue, &mut encoder, None);
@@ -955,6 +974,148 @@ fn what_a_pane_asks_for_is_where_the_image_looks() {
     assert!(
         both.abs_diff(parked * 2) <= 3,
         "zoomed in it should be about twice as far across: {both} against {parked}"
+    );
+}
+
+/// The backdrop adds light, answers the beat, and does nothing when told not to.
+///
+/// The scene golden has it in the picture, but at a backdrop's strength it moves the
+/// mean by a third of a level out of 255, which is well inside the tolerance a golden
+/// has to allow: switching the whole pass off would not fail it. This is the test that
+/// would.
+#[test]
+fn the_backdrop_lights_the_ground_and_rides_the_beat() {
+    const SIDE: u32 = 128;
+    /// Where the ring's front is, as `backdrop.wgsl` puts it: the phase over the rings
+    /// per unit of distance from the centre.
+    const RINGS_PER_UNIT: f64 = 1.6;
+    let Some((device, queue, _, _)) = open_gpu() else {
+        eprintln!("no GPU here; skipping the backdrop");
+        return;
+    };
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("backdrop"),
+        size: wgpu::Extent3d {
+            width: SIDE,
+            height: SIDE,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let attachment = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let backdrop = BackdropPass::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+    let lut = palette::build_lut(PaletteKind::Magma);
+    // Halfway round the beat, so the ring's front is well inside the picture.
+    const PHASE: f64 = 0.5;
+    let field = |strength: f64, pulse: f64, reactive: bool| FieldView {
+        size: (SIDE, SIDE),
+        time: 4.0,
+        phase: PHASE,
+        pulse,
+        brightness: 0.5,
+        strength,
+        reactive,
+        deep: Rgba::rgb(palette::color_at(&lut, 0.30), 255),
+        hot: Rgba::rgb(palette::color_at(&lut, 0.92), 255),
+    };
+    // The light over the whole picture, and the row through the middle, so the ring can
+    // be found as well as counted.
+    let render = |view: &FieldView| {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("backdrop"),
+        });
+        {
+            let mut pass = encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("backdrop"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &attachment,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                })
+                .forget_lifetime();
+            backdrop.draw(&queue, &mut pass, view);
+        }
+        let shot = Readback::record(&device, &mut encoder, &target);
+        queue.submit([encoder.finish()]);
+        let (w, _h, pixels) = shot.pixels(&device).expect("the frame reads back");
+        let total: u64 = (0..SIDE as usize)
+            .flat_map(|y| (0..SIDE as usize).map(move |x| (x, y)))
+            .map(|(x, y)| u64::from(pixels[(y * w as usize + x) * 4]))
+            .sum();
+        // The middle row, right of centre, where the ring crosses it.
+        let half = SIDE as usize / 2;
+        let across: Vec<u8> = (half..SIDE as usize)
+            .map(|x| pixels[(half * w as usize + x) * 4])
+            .collect();
+        (total, across)
+    };
+
+    // Switched off, nothing at all reaches the target.
+    let (none, _) = render(&field(0.0, 1.0, true));
+    assert_eq!(none, 0, "a backdrop of no strength drew something");
+
+    // Switched on, light where there was none, and more of it for more strength.
+    let (dim, _) = render(&field(0.2, 0.0, true));
+    let (quiet, still) = render(&field(0.4, 0.0, true));
+    let (bright, _) = render(&field(0.6, 0.0, true));
+    assert!(
+        0 < dim && dim < quiet && quiet < bright,
+        "{dim} {quiet} {bright}"
+    );
+
+    // A hit lights the ring. A ring is a band, not the whole picture, so a fifth more
+    // light over everything is a strong signal rather than a weak one.
+    let (hit_total, hit) = render(&field(0.4, 1.0, true));
+    assert!(
+        hit_total > quiet * 6 / 5,
+        "a hit barely showed: {quiet} to {hit_total}"
+    );
+    // Where the ring is, against the same row with no hit in it. The difference is the
+    // ring and nothing else; the brightest pixel on its own would as likely be a crest
+    // of the drift, which is there either way.
+    let added: Vec<i32> = hit
+        .iter()
+        .zip(&still)
+        .map(|(&a, &b)| i32::from(a) - i32::from(b))
+        .collect();
+    // The front is where the phase reaches a whole ring, in half-widths from the centre.
+    // Inside it the wave's light; outside it, nothing yet. That edge is the thing worth
+    // pinning: it is what makes the ring read as travelling rather than as a circle
+    // being drawn, and it was the wrong way round the first time.
+    let front = (PHASE / RINGS_PER_UNIT * f64::from(SIDE)) as usize;
+    // The levels are small because this target is linear and eight bits; in the app the
+    // composite encodes them and the same ring is four times brighter on screen.
+    assert!(
+        added[front - 1] >= 10,
+        "no light behind the ring's front: {added:?}"
+    );
+    assert!(
+        added[front] * 3 < added[front - 1],
+        "light ahead of the ring's front, so it is not travelling: {added:?}"
+    );
+    // And the light falls away going back from the front, rather than being a band.
+    assert!(added[front - 1] > added[front - 6] * 2, "{added:?}");
+
+    // With the beat switched off the same hit changes nothing: the field only drifts.
+    let (deaf, _) = render(&field(0.4, 1.0, false));
+    assert_eq!(
+        deaf, quiet,
+        "the field answered a beat it was told to ignore"
     );
 }
 
