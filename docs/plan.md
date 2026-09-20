@@ -122,10 +122,13 @@ begins at [Next](#next).
   nothing plays, and a list of apps with audio sessions. Whole-system capture runs on the
   reference PC at 48 kHz with nothing dropped.
 - [x] Linux: a PipeWire stream on the default sink's monitor or on one app's node, asking
-  for a 256-frame quantum, plus an app list from the registry. It's written against
-  pipewire-rs 0.10 but has never been compiled; the first Linux CI run will be its first
-  build. Its process callback runs on the source's own loop thread rather than PipeWire's
-  real-time one, so the silence timer and capture share the ring's single producer.
+  for a 256-frame quantum, plus an app list from the registry. Its process callback runs
+  on the source's own loop thread rather than PipeWire's real-time one, so the silence
+  timer and capture share the ring's single producer. **It compiles now:** a Linux
+  machine built it for the first time and found three things the Windows type-check
+  could not see, the real one being that `keys::TARGET_OBJECT` sits behind pipewire-rs's
+  `v0_3_44` feature, so following one app's node had never built. The feature is on; it
+  asks for PipeWire 0.3.44 (February 2022) against the 1.0.5 Ubuntu 24.04 ships.
 - [ ] Process loopback and device switching, exercised with sound playing.
 - [ ] Capture-to-analysis latency measured (target under 15 ms).
 - [ ] Ubuntu 24.04 and 26.04, and Windows 11.
@@ -160,9 +163,9 @@ begins at [Next](#next).
   of the size and composited back, as the GDI+ version did. `I` turns immersive mode on,
   with the beat flare and the palette drifting with the music's brightness.
 - [x] **Golden renders** (`tests/golden.rs`): the whole scene drawn offscreen and
-  compared with a committed picture, one per software renderer (WARP's is committed;
-  lavapipe's will be on the first Linux run). On a hardware GPU it checks the frame is
-  drawn rather than its pixels. It found a real bug immediately: the overlay's
+  compared with a committed picture, one per software renderer. Both are committed now:
+  WARP's, and lavapipe's from this Linux machine. On a hardware GPU it checks the frame
+  is drawn rather than its pixels. It found a real bug immediately: the overlay's
   screen-size uniform read as zeros on WARP, which put every shape at infinity.
 - [x] **GPU timing** (`timing.rs`): timestamp queries around each pass, with the total
   in the status line. At 1920x1080 on the reference PC a frame costs 2.9 ms without the
@@ -312,21 +315,21 @@ holds more than the screen shows and the spectrogram pass already maps any axis 
 per pixel, so zooming is mostly a matter of what the panes ask it for; `px_per_row` and
 the hover's age-at-a-column arithmetic are the beginnings of it.
 
-**A flaky golden, found here and not caused here.** `the_scene_renders_as_it_did` fails
-about one run in three on WARP, always on the same single column of pixels: x=477, where
-the right pane's curve strip begins and its viewport's left edge falls. The same test
-binary passes and fails across runs with the layout identical every time (gutter
-443..477, the strip's base column at 477), so it is a rasterisation edge case at the
-viewport boundary rather than a change in what is drawn. It is older than the work that
-found it: the test was run at HEAD to check. Worth fixing before CI, where a
-one-in-three flake is worse than here: either draw the strip without a viewport, using a
-scissor or the rect in the shader, or widen the golden's tolerance for a single boundary
-column. Not fixed here because it is Phase 3's renderer and wants a careful look rather
-than a guess.
+**A flaky golden, found here and not caused here, and now known to be WARP's.**
+`the_scene_renders_as_it_did` fails about one run in three on WARP, always on the same
+single column of pixels: x=477, where the right pane's curve strip begins and its
+viewport's left edge falls. The same test binary passes and fails across runs with the
+layout identical every time (gutter 443..477, the strip's base column at 477), so it is
+a rasterisation edge case at the viewport boundary rather than a change in what is
+drawn. It is older than the work that found it: the test was run at HEAD to check.
+**On lavapipe it does not happen:** six runs on this machine gave six byte-identical
+renders, which narrows it to WARP's rasteriser rather than the way the strip is drawn.
+That lowers it from a CI blocker to a Windows-runner one, and the fix stays the same if
+it bites: draw the strip without a viewport, using a scissor or the rect in the shader,
+or widen the golden's tolerance for a single boundary column.
 
-Before that, or alongside it, the things that need a machine this one isn't: the
-first CI run, which is the first PipeWire build and the first lavapipe golden; then
-the player checks in Phase 4 and the scaling checks above. Carried over: the first
+Still wanting a machine this one isn't: the first CI run, the player checks in Phase 4
+and the scaling checks above. Carried over: the first
 frame's 100-odd ms of lazy initialisation (logged as a stall) could move into start-up,
 and swapping the capture source happens on the frame loop's thread, so following
 a player costs a frame. Two new ones: the settings are only written on exit, so a
