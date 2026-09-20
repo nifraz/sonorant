@@ -1,63 +1,26 @@
-//! The egui layer for now: a status line and a provisional context menu.
+//! The egui layer: the right-click menu, the help window and the name dialog.
 //!
-//! Phase 5 replaces the menu with one built from the menu model; this one exercises the
-//! pieces that model will drive: checkboxes, radio groups, submenus and shortcuts.
+//! None of these decide anything. [`sonorant_core::menu`] holds the tree of items, and
+//! this draws it: a submenu for a submenu, a checkbox for a switch, a radio button for a
+//! choice, each with its key written alongside and its help line as a tooltip. A click
+//! hands the item's action back to [`sonorant_core::menu::apply`], which is also where
+//! the keyboard sends its keys, so both go through the same door.
 
-use sonorant_core::dsp::{ChannelPairMode, FreqScale};
-use sonorant_core::media::{Follow, Player};
-use sonorant_core::palette::PaletteKind;
-use sonorant_core::settings::Settings;
+use sonorant_core::media::{Controls, Player};
+use sonorant_core::menu::{self, Action, Context, Effect, Item, Kind, Presentation, Session};
+use sonorant_core::settings::{Settings, sanitise_name};
 
 use crate::pacing::PacingStats;
 use crate::present::PresentCounts;
 
-/// What capture listens to.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Capture {
-    /// Whatever the followed player is playing through, falling back to the whole mix
-    /// when there is no player to follow.
-    #[default]
-    FollowPlayer,
-    /// Everything the machine is playing, whoever is playing it.
-    WholeSystem,
-}
-
-/// What the menu and keys control.
-#[derive(Clone, Debug, PartialEq)]
-pub struct UiState {
-    pub frozen: bool,
-    pub capture: Capture,
-    pub follow: Follow,
-    pub palette: PaletteKind,
-    pub pair_mode: ChannelPairMode,
-    pub scale: FreqScale,
-    pub rows_per_second: u32,
-    pub px_per_row: u32,
-    pub smooth_time: bool,
-    pub show_status: bool,
-    pub present_mode: wgpu::PresentMode,
-    pub fullscreen: bool,
-    pub quit: bool,
-}
-
-impl UiState {
-    pub fn from_settings(s: &Settings, fullscreen: bool) -> UiState {
-        UiState {
-            frozen: false,
-            capture: Capture::default(),
-            follow: Follow::default(),
-            palette: s.palette,
-            pair_mode: s.pair_mode,
-            scale: s.scale,
-            rows_per_second: s.rows_per_second.round().max(1.0) as u32,
-            px_per_row: 1,
-            smooth_time: false,
-            show_status: s.show_status,
-            present_mode: wgpu::PresentMode::Fifo,
-            fullscreen,
-            quit: false,
-        }
-    }
+/// A preset the app has to fetch, write or remove: the model can't reach the settings
+/// folder itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Ask {
+    Load(String),
+    /// Save the settings as they are under a name the dialog has already taken.
+    Save(String),
+    Delete(String),
 }
 
 /// Everything the status line reports.
@@ -71,114 +34,300 @@ pub struct Status {
     pub dropped: (u64, u64),
 }
 
-/// Lays out one frame's UI and returns the area left for the visuals, in points.
-pub fn show(
-    ui: &mut egui::Ui,
-    state: &mut UiState,
-    present_modes: &[wgpu::PresentMode],
-    players: &[Player],
-) -> egui::Rect {
-    // The status line itself is drawn by the renderer, over the image, where
-    // Nostalgia+ had it; egui only carries the menu.
-    let mut area = egui::Rect::NOTHING;
-    egui::CentralPanel::default()
-        .frame(egui::Frame::NONE)
-        .show(ui, |ui| {
-            area = ui.max_rect();
-            let response = ui.interact(area, egui::Id::new("visuals"), egui::Sense::click());
-            if response.clicked() {
-                state.frozen = !state.frozen;
-            }
-            response.context_menu(|ui| menu(ui, state, present_modes, players));
-        });
-    area
+/// The state the windows keep between frames, and the work they hand back.
+#[derive(Debug, Default)]
+pub struct Shell {
+    /// The state the menu reads and writes that isn't a saved setting.
+    pub session: Session,
+    /// What the help window's search box holds.
+    query: String,
+    /// The name dialog while it is open: the name typed, and why it can't be used yet.
+    naming: Option<(String, Option<String>)>,
+    /// Set when the help window opens, so the search box takes the focus once.
+    focus_search: bool,
+    asks: Vec<Ask>,
 }
 
-fn menu(
-    ui: &mut egui::Ui,
-    state: &mut UiState,
-    present_modes: &[wgpu::PresentMode],
-    players: &[Player],
-) {
-    ui.menu_button("Capture", |ui| {
-        ui.radio_value(
-            &mut state.capture,
-            Capture::FollowPlayer,
-            "Following player",
-        );
-        ui.radio_value(&mut state.capture, Capture::WholeSystem, "Whole system");
-    });
-    ui.menu_button("Follow player", |ui| {
-        ui.radio_value(&mut state.follow, Follow::Whichever, "Whichever is playing");
-        if players.is_empty() {
-            ui.add_enabled(false, egui::Button::new("No players running"));
+impl Shell {
+    pub fn new(fullscreen: bool) -> Shell {
+        Shell {
+            session: Session {
+                fullscreen,
+                ..Session::default()
+            },
+            ..Shell::default()
         }
-        for player in players {
-            // Pinning is by id, because two windows of the same app share a name.
-            let pinned = state.follow == Follow::Pinned(player.id.clone());
-            if ui.radio(pinned, &player.name).clicked() {
-                state.follow = Follow::Pinned(player.id.clone());
+    }
+
+    /// Work the app has to carry out, taken once a frame.
+    pub fn take_asks(&mut self) -> Vec<Ask> {
+        std::mem::take(&mut self.asks)
+    }
+
+    /// Performs one action, and holds on to anything the app has to finish.
+    ///
+    /// This is the one way in: the menu, the keys and the deck's buttons all come
+    /// through here.
+    pub fn act(&mut self, action: &Action, settings: &mut Settings) {
+        match menu::apply(action, settings, &mut self.session) {
+            Some(Effect::LoadPreset(name)) => self.asks.push(Ask::Load(name)),
+            Some(Effect::DeletePreset(name)) => self.asks.push(Ask::Delete(name)),
+            // The name has to be asked for before anything can be saved.
+            Some(Effect::SavePreset) => self.naming = Some((String::new(), None)),
+            None => {}
+        }
+        if matches!(action, Action::Help) && self.session.help {
+            self.focus_search = true;
+        }
+    }
+
+    /// Lays out one frame's UI and returns the area left for the visuals, in points.
+    pub fn show(&mut self, ui: &mut egui::Ui, settings: &mut Settings, what: &Around<'_>) -> Area {
+        let mut area = Area::default();
+        let mut chosen: Option<Action> = None;
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE)
+            .show(ui, |ui| {
+                area.rect = ui.max_rect();
+                let response =
+                    ui.interact(area.rect, egui::Id::new("visuals"), egui::Sense::click());
+                area.hovered = response
+                    .hovered()
+                    .then(|| ui.ctx().pointer_latest_pos())
+                    .flatten();
+                area.double_clicked = response.double_clicked();
+                area.clicked = response.clicked();
+                area.menu_open = response.context_menu_opened();
+                response.context_menu(|ui| {
+                    let items = menu::tree(&Context {
+                        settings,
+                        session: &self.session,
+                        players: what.players,
+                        presets: what.presets,
+                        controls: what.controls,
+                        presentations: what.presentations,
+                    });
+                    draw(ui, &items, &mut chosen);
+                });
+            });
+        if let Some(action) = chosen {
+            self.act(&action, settings);
+        }
+        self.help(ui.ctx(), settings, what);
+        self.name_dialog(ui.ctx(), what.presets);
+        area
+    }
+
+    /// The help window: every command, with its key and what it does, filtered by the
+    /// search box. Clicking one performs it, so help is also a way to reach a command
+    /// whose menu you can't remember.
+    fn help(&mut self, ctx: &egui::Context, settings: &mut Settings, what: &Around<'_>) {
+        if !self.session.help {
+            return;
+        }
+        let items = menu::tree(&Context {
+            settings,
+            session: &self.session,
+            players: what.players,
+            presets: what.presets,
+            controls: what.controls,
+            presentations: what.presentations,
+        });
+        let mut open = true;
+        let mut chosen: Option<Action> = None;
+        egui::Window::new("Help")
+            .open(&mut open)
+            .default_width(520.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Search");
+                    let box_ = ui.text_edit_singleline(&mut self.query);
+                    // The window is opened to be typed into, but only on the frame it
+                    // opens: taking the focus back every frame would trap it.
+                    if std::mem::take(&mut self.focus_search) {
+                        box_.request_focus();
+                    }
+                    if ui.button("Clear").clicked() {
+                        self.query.clear();
+                    }
+                });
+                ui.separator();
+                let found = menu::search(&items, &self.query);
+                ui.label(match found.len() {
+                    0 => "Nothing matches".to_owned(),
+                    1 => "1 command".to_owned(),
+                    n => format!("{n} commands"),
+                });
+                egui::ScrollArea::vertical()
+                    .max_height(420.0)
+                    .show(ui, |ui| {
+                        egui::Grid::new("help-grid")
+                            .num_columns(3)
+                            .striped(true)
+                            .show(ui, |ui| {
+                                for entry in found {
+                                    if ui.button(&entry.path).clicked() {
+                                        chosen = Some(entry.action.clone());
+                                    }
+                                    ui.label(entry.shortcut.unwrap_or(""));
+                                    ui.label(entry.help);
+                                    ui.end_row();
+                                }
+                            });
+                    });
+            });
+        if let Some(action) = chosen {
+            self.act(&action, settings);
+        }
+        if !open {
+            self.session.help = false;
+        }
+    }
+
+    /// The name dialog, for saving the settings as a preset of your own.
+    fn name_dialog(&mut self, ctx: &egui::Context, presets: &[String]) {
+        let Some((text, error)) = &mut self.naming else {
+            return;
+        };
+        let mut open = true;
+        let mut save = false;
+        let mut cancel = false;
+        egui::Window::new("Save these settings")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("A name for this preset");
+                let box_ = ui.text_edit_singleline(text);
+                box_.request_focus();
+                if let Some(why) = error.as_deref() {
+                    ui.colored_label(ui.visuals().error_fg_color, why);
+                }
+                let replaces = presets
+                    .iter()
+                    .any(|p| p.eq_ignore_ascii_case(sanitise_name(text).as_str()));
+                ui.horizontal(|ui| {
+                    save = ui
+                        .button(if replaces { "Replace" } else { "Save" })
+                        .clicked();
+                    cancel = ui.button("Cancel").clicked();
+                });
+                save |= box_.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                cancel |= ui.input(|i| i.key_pressed(egui::Key::Escape));
+            });
+        if save {
+            // A preset is a file, so the name has to be one a file can have. Saying so
+            // beats writing "My mix 2/3" to a folder that has no such place.
+            let name = sanitise_name(text);
+            if name.is_empty() {
+                *error = Some("A name needs a letter or a digit in it".to_owned());
+            } else {
+                self.asks.push(Ask::Save(name));
+                self.naming = None;
+            }
+        } else if cancel || !open {
+            self.naming = None;
+        }
+    }
+}
+
+/// What the app knows and the model doesn't: the lists the menu offers.
+#[derive(Debug)]
+pub struct Around<'a> {
+    pub players: &'a [Player],
+    pub presets: &'a [String],
+    pub controls: Controls,
+    pub presentations: &'a [Presentation],
+}
+
+/// What the central panel left for the visuals, and what the pointer did in it.
+#[derive(Clone, Copy, Debug)]
+pub struct Area {
+    pub rect: egui::Rect,
+    /// Where the pointer is over the visuals, in points, or `None` when it is elsewhere.
+    pub hovered: Option<egui::Pos2>,
+    pub double_clicked: bool,
+    /// Whether it was clicked at all, for the quick bar's buttons.
+    pub clicked: bool,
+    /// Whether the right-click menu is open, so the chrome doesn't fade under it.
+    pub menu_open: bool,
+}
+
+impl Default for Area {
+    fn default() -> Area {
+        Area {
+            rect: egui::Rect::NOTHING,
+            hovered: None,
+            double_clicked: false,
+            clicked: false,
+            menu_open: false,
+        }
+    }
+}
+
+/// Draws a level of the menu, and says which item was clicked.
+fn draw(ui: &mut egui::Ui, items: &[Item], chosen: &mut Option<Action>) {
+    for item in items {
+        match &item.kind {
+            Kind::Separator => {
+                ui.separator();
+            }
+            Kind::Submenu(children) => {
+                ui.menu_button(item.label.as_str(), |ui| draw(ui, children, chosen))
+                    .response
+                    .on_hover_text(item.help);
+            }
+            Kind::Command(action) => {
+                let hit = ui
+                    .add_enabled(item.enabled, egui::Button::new(atoms(item)))
+                    .on_hover_text(item.help);
+                if hit.clicked() {
+                    *chosen = Some(action.clone());
+                    ui.close();
+                }
+            }
+            Kind::Check(action, on) => {
+                // The checkbox's own bool is thrown away: the state comes from the model
+                // next frame, so a switch can't drift from what it controls.
+                let mut shown = *on;
+                let hit = ui
+                    .add_enabled(item.enabled, egui::Checkbox::new(&mut shown, atoms(item)))
+                    .on_hover_text(item.help);
+                if hit.clicked() {
+                    *chosen = Some(action.clone());
+                }
+            }
+            Kind::Radio(action, selected) => {
+                let hit = ui
+                    .add_enabled(item.enabled, egui::RadioButton::new(*selected, atoms(item)))
+                    .on_hover_text(item.help);
+                if hit.clicked() {
+                    *chosen = Some(action.clone());
+                }
             }
         }
-    });
-    ui.separator();
-    ui.menu_button("Channels", |ui| {
-        for (mode, label) in [
-            (ChannelPairMode::LeftRight, "Left and right"),
-            (ChannelPairMode::MidSide, "Mid and side"),
-            (ChannelPairMode::LeftOnly, "Left only"),
-            (ChannelPairMode::RightOnly, "Right only"),
-        ] {
-            ui.radio_value(&mut state.pair_mode, mode, label);
-        }
-    });
-    ui.menu_button("Frequency axis", |ui| {
-        for (scale, label) in [
-            (FreqScale::Note, "Notes"),
-            (FreqScale::Log, "Logarithmic"),
-            (FreqScale::Linear, "Linear"),
-        ] {
-            ui.radio_value(&mut state.scale, scale, label);
-        }
-    });
-    ui.menu_button("Palette", |ui| {
-        for kind in PaletteKind::ALL {
-            ui.radio_value(&mut state.palette, kind, kind.display_name());
-        }
-    });
-    ui.menu_button("Scroll speed", |ui| {
-        for rps in [15, 30, 60, 120] {
-            ui.radio_value(
-                &mut state.rows_per_second,
-                rps,
-                format!("{rps} rows per second"),
-            );
-        }
-    });
-    ui.menu_button("Zoom", |ui| {
-        for px in [1, 2, 4, 8] {
-            ui.radio_value(&mut state.px_per_row, px, format!("{px} px per row"));
-        }
-    });
-    ui.checkbox(&mut state.smooth_time, "Blend between rows");
-    ui.separator();
-    ui.checkbox(&mut state.frozen, "Freeze\tSpace or click");
-    ui.menu_button("Presentation", |ui| {
-        for mode in [
-            wgpu::PresentMode::Fifo,
-            wgpu::PresentMode::Mailbox,
-            wgpu::PresentMode::Immediate,
-        ] {
-            let available = present_modes.contains(&mode);
-            ui.add_enabled_ui(available, |ui| {
-                ui.radio_value(&mut state.present_mode, mode, format!("{mode:?}"));
-            });
-        }
-    });
-    ui.checkbox(&mut state.show_status, "Status line");
-    ui.checkbox(&mut state.fullscreen, "Fullscreen\tF11");
-    ui.separator();
-    if ui.button("Quit").clicked() {
-        state.quit = true;
+    }
+}
+
+/// An item's label, with its key pushed out to the right edge.
+fn atoms(item: &Item) -> egui::Atoms<'_> {
+    let mut atoms = egui::Atoms::new(item.label.as_str());
+    if let Some(key) = item.shortcut {
+        atoms.push_right(egui::Atom::grow());
+        atoms.push_right(egui::RichText::new(key).weak());
+    }
+    atoms
+}
+
+/// The name a key goes by in the menu model, or `None` for a key it doesn't use.
+pub fn key_name(key: &winit::keyboard::Key) -> Option<String> {
+    use winit::keyboard::{Key, NamedKey};
+    match key {
+        Key::Named(NamedKey::Space) => Some("Space".to_owned()),
+        Key::Named(NamedKey::Escape) => Some("Esc".to_owned()),
+        Key::Named(NamedKey::F1) => Some("F1".to_owned()),
+        Key::Named(NamedKey::F11) => Some("F11".to_owned()),
+        Key::Character(c) if c.len() == 1 && c.is_ascii() => Some(c.to_uppercase()),
+        _ => None,
     }
 }

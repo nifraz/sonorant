@@ -27,7 +27,7 @@ fn stereo_view_panes_match() {
             mirror_left_pane: case.b("mirror_left_pane"),
             ..Settings::default()
         };
-        let l = ScopeLayout::new(Rect::new(0, 0, 1200, 600), &s);
+        let l = ScopeLayout::new(Rect::new(0, 0, 1200, 600), &s, 1.0);
         let id = format!(
             "{} mirror={}",
             case.s("pair_mode"),
@@ -98,7 +98,7 @@ fn centre_deck_layouts_match() {
             }
         }
         let (w, h) = (case.u("width") as i32, case.u("height") as i32);
-        let d = DeckLayout::new(Rect::new(0, 0, w, h), &s, &mut segoe_7pt);
+        let d = DeckLayout::new(Rect::new(0, 0, w, h), &s, 1.0, &mut segoe_7pt);
         let id = format!("{w}x{h} {}", case.s("settings"));
         for (name, ours) in [
             ("art", d.art),

@@ -9,7 +9,7 @@
 use std::time::Instant;
 
 use sonorant_core::media::{
-    ArtLoader, Follow, MediaSession, Player, PositionClock, Snapshot, Transport,
+    ArtLoader, Controls, Follow, MediaSession, Player, PositionClock, Snapshot, Transport,
 };
 use sonorant_render::TrackInfo;
 use sonorant_render::artwork::{self, Artwork, ArtworkPass};
@@ -148,12 +148,13 @@ impl NowPlaying {
         self.follow = choice;
     }
 
+    /// What the followed player says it can be asked to do, so the menu and the deck's
+    /// buttons can grey out what it can't.
+    pub fn controls(&self) -> Controls {
+        self.snapshot.controls
+    }
+
     /// Asks the player to do something, if it says it can.
-    ///
-    /// The deck's transport buttons reach this in Phase 5, when there is input to
-    /// press them with; what it guards is already here, so a control the player says
-    /// it cannot do never turns into a command.
-    #[expect(dead_code, reason = "the deck's buttons are wired up in Phase 5")]
     pub fn send(&self, command: Transport) -> bool {
         let controls = self.snapshot.controls;
         let allowed = match command {

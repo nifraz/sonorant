@@ -150,14 +150,22 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue) -> (u32, u32, Vec<u8>) {
     let bar_w = 40;
     let colour_bar = Rect::new(client.right() - bar_w, 0, bar_w, client.h);
     let view_rect = Rect::new(0, 0, client.w - bar_w, client.h);
-    let band_h = BandLayout::height_for(&settings, view_rect.h);
+    let band_h = BandLayout::height_for(&settings, view_rect.h, 1.0);
     let layout = ScopeLayout::new(
         Rect::new(0, 0, view_rect.w, view_rect.h - band_h),
         &settings,
+        1.0,
     );
     let label_px = axes::label_px(&settings, 1.0);
     let mut measure = |text: &str| overlay.measure(text, Face::Sans, label_px).w;
-    let band = BandLayout::new(view_rect, band_h, &settings, &layout.panes, &mut measure);
+    let band = BandLayout::new(
+        view_rect,
+        band_h,
+        &settings,
+        &layout.panes,
+        1.0,
+        &mut measure,
+    );
 
     let columns = layout.columns();
     let map = FrequencyMap::new(settings.scale, columns, settings.fmin, settings.fmax);

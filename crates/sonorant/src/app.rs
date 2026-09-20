@@ -4,29 +4,37 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use sonorant_core::engine::{AnalysisConfig, GRID_BINS};
+use sonorant_core::media::Transport;
+use sonorant_core::menu::{self, Capture, Presentation};
 use sonorant_core::palette::{self, Lut};
 use sonorant_core::runtime::PaneCurves;
-use sonorant_core::settings::{CurveStyle, Settings};
+use sonorant_core::settings::{FrameCap, Settings};
 use sonorant_core::store::{self, Store};
 use sonorant_render::{
     ArtworkPass, BandLayout, CurveData, CurveLook, CurvePass, CurveView, DeckState, GpuTimer,
-    HistoryStore, Layer, Overlay, PaneView, Readback, Rect, RowIn, ScopeLayout, SpectrogramPass,
-    Visuals, WaveRing, axes, bloom, deck,
+    HistoryStore, Layer, Overlay, PaneView, QuickBar, Readback, Reading, Readout, Rect, RowIn,
+    ScopeLayout, SpectrogramPass, Visuals, WaveRing, axes, bloom, deck, hover, quickbar,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::Key;
 use winit::window::{Fullscreen, Window, WindowId};
 
 use crate::audio::{Audio, Input};
+use crate::chrome::Chrome;
 use crate::gpu::Gpu;
 use crate::nowplaying::NowPlaying;
 use crate::options::Options;
 use crate::pacing::FramePacing;
 use crate::present::PresentMonitor;
-use crate::ui::{self, Status, UiState};
+use crate::ui::{Around, Ask, Shell, Status};
 use sonorant_core::source::SourceStatus;
+
+#[cfg(target_os = "linux")]
+use sonorant_platform::linux::{Appearance, ScreenAwake, appearance};
+#[cfg(windows)]
+use sonorant_platform::windows::{Appearance, ScreenAwake, appearance};
 
 /// How often the status line's numbers change, so they can be read.
 const STATUS_EVERY: Duration = Duration::from_millis(250);
@@ -37,6 +45,9 @@ const STALL: Duration = Duration::from_millis(100);
 /// How long a capture target that could not be opened is left alone before it is
 /// tried again.
 const CAPTURE_RETRY: Duration = Duration::from_secs(5);
+/// How often a covered window looks again, in case the platform doesn't say when it is
+/// uncovered.
+const IDLE_LOOK: Duration = Duration::from_millis(250);
 
 /// Events sent to the loop from other threads.
 #[derive(Debug)]
@@ -103,6 +114,8 @@ struct Running {
     last_band: BandLayout,
     /// The colour bar down the right edge, or empty.
     colour_bar: Rect,
+    /// The strip of buttons over the image, or empty.
+    quick_bar: QuickBar,
     waves: WaveRing,
     /// The cover and the backdrop, and the quads they are drawn as.
     artwork: ArtworkPass,
@@ -119,8 +132,39 @@ struct Running {
     presented: PresentMonitor,
     /// How long the last frame's CPU work took, from acquire to present.
     last_work: Duration,
-    ui: UiState,
-    applied: UiState,
+    /// The menu, the help window and the state they share with the keys.
+    shell: Shell,
+    /// The settings and the session as the frame loop last acted on them, so a change
+    /// is noticed once rather than reapplied every frame.
+    applied: Settings,
+    applied_session: menu::Session,
+    /// What analysis was last told to do, so it is only told again when it changes.
+    config: AnalysisConfig,
+    /// The user's saved presets, reread whenever one is saved or deleted.
+    presets: Vec<String>,
+    /// The desktop's accent colour and whether it is dark, which stand in for the skin
+    /// colours Nostalgia+ took from MusicBee.
+    appearance: Appearance,
+    /// Holds the screen on while there is something to watch.
+    awake: ScreenAwake,
+    /// Where the pointer is over the visuals, in points, or `None`.
+    pointer: Option<egui::Pos2>,
+    /// Whether the right-click menu is open, so the chrome doesn't fade under it.
+    menu_open: bool,
+    /// Whether the pointer was double-clicked over the visuals this frame.
+    double_clicked: bool,
+    /// Whether it was clicked, for the quick bar's buttons.
+    clicked: bool,
+    /// How far the furniture has faded, and whether the pointer is shown with it.
+    chrome: Chrome,
+    /// Whether the pointer is currently hidden, so it is only asked to change when it
+    /// has to be.
+    cursor_hidden: bool,
+    /// When the next frame is due, under a frame-rate cap.
+    next_frame: Option<Instant>,
+    /// Where the pointer was last frame, so the fade answers movement rather than
+    /// presence.
+    pointer_was: Option<egui::Pos2>,
     status: Status,
     status_at: Instant,
     occluded: bool,
@@ -237,8 +281,22 @@ impl App {
         };
         steps.mark("capture");
 
-        let mut ui = UiState::from_settings(&settings, self.options.fullscreen);
-        ui.present_mode = gpu.config.present_mode;
+        let appearance = appearance();
+        log::info!(
+            "desktop: {}, accent {}",
+            if appearance.dark { "dark" } else { "light" },
+            appearance
+                .accent
+                .map_or("none".to_owned(), |c| c.to_string())
+        );
+        egui_ctx.set_theme(if appearance.dark {
+            egui::Theme::Dark
+        } else {
+            egui::Theme::Light
+        });
+        let mut shell = Shell::new(self.options.fullscreen);
+        shell.session.presentation = presentation_of(gpu.config.present_mode);
+        let presets = store.as_ref().map(Store::list_presets).unwrap_or_default();
         let refresh_hz = crate::present::compositor_refresh_hz().or_else(|| refresh_rate(&window));
         log::info!(
             "display: {} Hz, scale factor {:.2}; history holds {} rows",
@@ -284,12 +342,12 @@ impl App {
             loudness: sonorant_core::dsp::LoudnessReadings::default(),
             reference: None,
             audio,
-            settings,
             store,
             layout: ScopeLayout::default(),
             band: BandLayout::default(),
             last_band: BandLayout::default(),
             colour_bar: Rect::EMPTY,
+            quick_bar: QuickBar::default(),
             waves: WaveRing::new(4096),
             artwork,
             now_playing: NowPlaying::start(),
@@ -300,8 +358,22 @@ impl App {
             pacing: FramePacing::new(refresh_hz),
             presented: PresentMonitor::default(),
             last_work: Duration::ZERO,
-            applied: ui.clone(),
-            ui,
+            applied: settings.clone(),
+            applied_session: shell.session.clone(),
+            config: AnalysisConfig::from_settings(&settings, columns),
+            appearance,
+            awake: ScreenAwake::new(),
+            pointer: None,
+            menu_open: false,
+            double_clicked: false,
+            clicked: false,
+            chrome: Chrome::new(now),
+            cursor_hidden: false,
+            next_frame: None,
+            pointer_was: None,
+            settings,
+            presets,
+            shell,
             status_at: now,
             occluded: false,
         })
@@ -471,29 +543,18 @@ impl ApplicationHandler<UserEvent> for App {
                         ..
                     },
                 ..
-            } if !response.consumed => match logical_key {
-                Key::Named(NamedKey::Space) => r.ui.frozen = !r.ui.frozen,
-                Key::Character(c) if c.eq_ignore_ascii_case("a") => r.toggle_reference(),
-                Key::Character(c) if c.eq_ignore_ascii_case("i") => {
-                    r.settings.immersive = !r.settings.immersive
-                }
-                Key::Character(c) if c.eq_ignore_ascii_case("b") => {
-                    r.settings.style = match r.settings.style {
-                        CurveStyle::Line => CurveStyle::Bars,
-                        CurveStyle::Bars => CurveStyle::Led,
-                        CurveStyle::Led => CurveStyle::Line,
-                    }
-                }
-                Key::Named(NamedKey::F11) => r.ui.fullscreen = !r.ui.fullscreen,
-                Key::Named(NamedKey::Escape) if r.ui.fullscreen => r.ui.fullscreen = false,
-                _ => {}
-            },
+            } if !response.consumed => {
+                // The key is looked up in the menu itself, so a shortcut can't drift
+                // away from the item it belongs to.
+                r.chrome.stir(Instant::now());
+                r.press(&logical_key);
+            }
             WindowEvent::RedrawRequested => {
                 if r.occluded {
                     return;
                 }
                 r.frame();
-                if r.ui.quit {
+                if r.shell.session.quit {
                     event_loop.exit();
                     return;
                 }
@@ -503,7 +564,16 @@ impl ApplicationHandler<UserEvent> for App {
                     event_loop.exit();
                     return;
                 }
-                r.window.request_redraw();
+                // Uncapped, the next frame is asked for at once and the swapchain
+                // paces it. Capped, it is due at a time, and `about_to_wait` sleeps
+                // until then rather than spinning.
+                match r.frame_interval() {
+                    None => {
+                        r.next_frame = None;
+                        r.window.request_redraw();
+                    }
+                    Some(interval) => r.next_frame = Some(Instant::now() + interval),
+                }
             }
             _ => {}
         }
@@ -515,11 +585,22 @@ impl ApplicationHandler<UserEvent> for App {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // Frames are driven by redraw requests; while the window is covered, look again
         // every so often in case the platform doesn't say when it's uncovered.
-        let occluded = self.running.as_ref().is_some_and(|r| r.occluded);
-        event_loop.set_control_flow(if occluded {
-            ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(250))
-        } else {
-            ControlFlow::Wait
+        let Some(r) = &mut self.running else {
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        };
+        if r.occluded {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + IDLE_LOOK));
+            return;
+        }
+        event_loop.set_control_flow(match r.next_frame {
+            None => ControlFlow::Wait,
+            Some(due) if Instant::now() >= due => {
+                r.next_frame = None;
+                r.window.request_redraw();
+                ControlFlow::Wait
+            }
+            Some(due) => ControlFlow::WaitUntil(due),
         });
     }
 
@@ -625,7 +706,7 @@ impl Running {
         // Say whose sound this is when capture went looking for it: "MusicBee, 48 kHz"
         // alone doesn't tell you whether that was chosen or followed.
         if self.capture_follows
-            && self.ui.capture == ui::Capture::FollowPlayer
+            && self.shell.session.capture == Capture::FollowPlayer
             && let Some(audio) = &self.audio
             && matches!(audio.input(), Input::App(_))
             && let Some(player) = self.now_playing.player()
@@ -651,12 +732,33 @@ impl Running {
 
         // The UI first, so the visuals know the space left to them.
         let raw_input = self.egui_state.take_egui_input(&self.window);
-        let mut area = egui::Rect::NOTHING;
-        let present_modes = self.gpu.present_modes.clone();
+        let mut area = crate::ui::Area::default();
+        let presentations: Vec<Presentation> = self
+            .gpu
+            .present_modes
+            .iter()
+            .map(|&m| presentation_of(m))
+            .collect();
         let players = self.now_playing.players().to_vec();
-        let mut full_output = self.egui_ctx.run_ui(raw_input, |ui| {
-            area = ui::show(ui, &mut self.ui, &present_modes, &players);
-        });
+        let around = Around {
+            players: &players,
+            presets: &self.presets,
+            controls: self.now_playing.controls(),
+            presentations: &presentations,
+        };
+        let shell = &mut self.shell;
+        let settings = &mut self.settings;
+        let mut full_output = self
+            .egui_ctx
+            .run_ui(raw_input, |ui| area = shell.show(ui, settings, &around));
+        self.pointer = area.hovered;
+        self.menu_open = area.menu_open;
+        self.double_clicked = area.double_clicked;
+        self.clicked = area.clicked;
+        let alpha = self.fade(now, &area);
+        for ask in self.shell.take_asks() {
+            self.carry_out(&ask);
+        }
         let mut textures = std::mem::take(&mut full_output.textures_delta);
         self.egui_state
             .handle_platform_output(&self.window, full_output.platform_output);
@@ -675,26 +777,32 @@ impl Running {
 
         // The panes, in physical pixels so the history keeps its detail at any scaling.
         let client = Rect::new(
-            (area.min.x * ppp).round() as i32,
-            (area.min.y * ppp).round() as i32,
-            (area.width() * ppp).round() as i32,
-            (area.height() * ppp).round() as i32,
+            (area.rect.min.x * ppp).round() as i32,
+            (area.rect.min.y * ppp).round() as i32,
+            (area.rect.width() * ppp).round() as i32,
+            (area.rect.height() * ppp).round() as i32,
         );
-        let bar_w = if self.settings.show_color_bar {
-            COLOUR_BAR_WIDTH
+        let drawn = self.drawn(ppp);
+        let bar_w = if drawn.show_color_bar {
+            (COLOUR_BAR_WIDTH as f32 * ppp).round() as i32
         } else {
             0
         };
         self.colour_bar = Rect::new(client.right() - bar_w, client.y, bar_w, client.h);
-        let view = Rect::new(client.x, client.y, (client.w - bar_w).max(16), client.h);
-        let band_h = BandLayout::height_for(&self.settings, view.h);
+        let whole = Rect::new(client.x, client.y, (client.w - bar_w).max(16), client.h);
+        // The quick bar is reserved rather than drawn over the image, so nothing it
+        // covers is analysis, and a button is never also a row of the image.
+        let label_px = axes::label_px(&self.settings, ppp);
+        let (quick, view) = QuickBar::reserve(whole, &drawn, label_px);
+        let band_h = BandLayout::height_for(&drawn, view.h, ppp);
         let bounds = Rect::new(view.x, view.y, view.w, (view.h - band_h).max(16));
-        self.layout = ScopeLayout::new(bounds, &self.settings);
+        self.layout = ScopeLayout::new(bounds, &drawn, ppp);
         if self.layout.columns() != self.columns {
+            // A resized pane is as much a change to what analysis measures as a menu
+            // item is, and goes the same way, so the two can't disagree about what
+            // analysis was last told.
             self.columns = self.layout.columns();
-            if let Some(audio) = &self.audio {
-                audio.set_config(AnalysisConfig::from_settings(&self.settings, self.columns));
-            }
+            self.retune_analysis();
         }
         let config = AnalysisConfig::from_settings(&self.settings, self.columns);
         let map = config.map(rate);
@@ -714,22 +822,21 @@ impl Running {
                 rect: p.spectro.to_f32(),
                 channel: i as u32,
                 newest_left: p.curve_on_left,
-                visible_rows: (p.spectro.w as f32 / self.ui.px_per_row as f32).max(1.0),
+                visible_rows: (p.spectro.w as f32 / self.px_per_row() as f32).max(1.0),
                 frac: frac as f32,
                 scale: map.scale,
                 fmin: map.fmin as f32,
                 fmax: map.fmax as f32,
                 global_range: None,
-                smooth_time: self.ui.smooth_time,
+                smooth_time: self.settings.smooth_time,
             })
             .collect();
         self.spectrogram
             .prepare(&self.gpu.queue, &self.history, &panes, self.held);
         self.update_hue();
-        self.prepare_curves();
+        self.prepare_curves(&drawn);
         self.overlay
             .begin(self.gpu.config.width, self.gpu.config.height);
-        let label_px = axes::label_px(&self.settings, ppp);
         // The deck's geometry depends on how wide a few strings are.
         let overlay = &mut self.overlay;
         let mut measure = |text: &str| {
@@ -745,8 +852,9 @@ impl Running {
                 self.layout.bounds.h + band_h,
             ),
             band_h,
-            &self.settings,
+            &drawn,
             &self.layout.panes,
+            ppp,
             &mut measure,
         );
         self.waves
@@ -757,23 +865,25 @@ impl Running {
         }
 
         // The status line is chrome over the image: it starts below the scale lane, and
-        // labels drawn over the image step below it in turn.
-        let chrome_top = self
-            .layout
-            .panes
-            .first()
-            .filter(|p| p.lane.h > 0 && p.lane.y <= p.bounds.y)
-            .map_or(0.0, |p| p.lane.h as f32);
+        // labels drawn over the image step below it in turn. Measured from where the
+        // panes actually begin, which is under the quick bar when there is one.
+        let chrome_top = self.layout.bounds.y as f32
+            + self
+                .layout
+                .panes
+                .first()
+                .filter(|p| p.lane.h > 0 && p.lane.y <= p.bounds.y)
+                .map_or(0.0, |p| p.lane.h as f32);
         let inset = if self.settings.show_status { 14.0 } else { 0.0 };
         let scales = axes::Scales {
             layout: &self.layout,
-            settings: &self.settings,
+            settings: &drawn,
             map: &map,
             floor_db: self.range.0,
             ceiling_db: self.range.1,
-            px_per_second: rps * self.ui.px_per_row as f64,
+            px_per_second: rps * self.px_per_row() as f64,
             scale: ppp,
-            alpha: 1.0,
+            alpha,
             top_inset: inset,
             label_floor_y: if self.settings.show_status {
                 chrome_top + inset + 16.0
@@ -783,6 +893,8 @@ impl Running {
         };
         axes::draw(&mut self.overlay, &scales);
         if self.settings.immersive && self.settings.imm_beat_reactive {
+            // The flare is part of the picture rather than furniture, so it stays when
+            // the chrome has gone.
             deck::draw_beat_flare(&mut self.overlay, client, &self.lut, self.pulse);
         }
         let state = DeckState {
@@ -800,22 +912,49 @@ impl Running {
             &mut self.overlay,
             &self.band,
             &self.layout.panes,
-            &self.settings,
+            &drawn,
             &self.lut,
             &self.waves,
             &state,
-            1.0,
+            alpha,
             label_px,
         );
+        let overlay = &mut self.overlay;
+        let mut measure = |text: &str| {
+            overlay
+                .measure(text, sonorant_render::Face::Sans, label_px)
+                .w
+        };
+        self.quick_bar = QuickBar::new(quick, self.layout.gutter, &drawn, ppp, &mut measure);
+        self.press_quick_bar(ppp);
+        let under = self
+            .pointer
+            .map(|p| ((p.x * ppp).round() as i32, (p.y * ppp).round() as i32))
+            .and_then(|(x, y)| self.quick_bar.hit(x, y))
+            .map(|b| b.rect);
+        quickbar::draw(
+            &mut self.overlay,
+            &self.quick_bar,
+            &drawn,
+            under.as_ref(),
+            alpha,
+            label_px,
+        );
+        self.press_deck(ppp, now);
+        self.draw_hover(&map, rps, ppp, now, alpha, &drawn);
+        // A full-screen analyser with music playing has no keypresses and no pointer
+        // movement, which is exactly what a screen blanks for.
+        self.awake
+            .set(self.shell.session.fullscreen && self.now_playing.playing());
         if self.settings.show_color_bar {
             deck::draw_colour_bar(
                 &mut self.overlay,
                 self.colour_bar,
-                &self.settings,
+                &drawn,
                 &self.lut,
                 self.range.0,
                 self.range.1,
-                1.0,
+                alpha,
                 label_px,
             );
         }
@@ -823,10 +962,10 @@ impl Running {
             let status = self.status_line();
             deck::draw_status(
                 &mut self.overlay,
-                &self.settings,
+                &drawn,
                 &status,
                 chrome_top,
-                1.0,
+                alpha,
                 label_px,
             );
         }
@@ -835,8 +974,7 @@ impl Running {
             &self.gpu.queue,
             (self.gpu.config.width, self.gpu.config.height),
             self.deck_art(),
-            // The furniture fade arrives with the rest of immersive mode in Phase 5.
-            1.0,
+            alpha as f32,
             self.backdrop_strength(),
         );
 
@@ -998,7 +1136,7 @@ impl Running {
                 Ok(()) => log::info!("saved the picture to {}", path.display()),
                 Err(e) => log::error!("cannot save a screenshot: {e}"),
             }
-            self.ui.quit = true;
+            self.shell.session.quit = true;
         }
         self.overlay.finish();
         self.timer.poll();
@@ -1032,9 +1170,9 @@ impl Running {
             audio.status,
             SourceStatus::NoDevice | SourceStatus::Failed(_)
         );
-        let want = match self.ui.capture {
-            ui::Capture::WholeSystem => Input::System,
-            ui::Capture::FollowPlayer => match self.now_playing.player().and_then(|p| p.pid) {
+        let want = match self.shell.session.capture {
+            Capture::WholeSystem => Input::System,
+            Capture::FollowPlayer => match self.now_playing.player().and_then(|p| p.pid) {
                 Some(pid) => Input::App(pid.to_string()),
                 None if on_app && !source_gone => return,
                 None => Input::System,
@@ -1120,14 +1258,14 @@ impl Running {
         if self.timer.is_available() {
             line += &format!("  |  GPU {:.1} ms", self.timer.total_ms());
         }
-        if self.ui.frozen {
+        if self.shell.session.frozen {
             line += "  |  FROZEN";
         }
         line
     }
 
     /// Uploads the curve strips for this frame's layout.
-    fn prepare_curves(&mut self) {
+    fn prepare_curves(&mut self, drawn: &Settings) {
         // A reference taken at another size no longer lines up with the rows.
         if let Some(r) = &self.reference
             && r.iter()
@@ -1136,7 +1274,7 @@ impl Running {
         {
             self.reference = None;
         }
-        let look = CurveLook::new(&self.settings, &self.lut, 1.0);
+        let look = CurveLook::new(drawn, &self.lut, 1.0);
         let (floor_db, ceiling_db) = self.range;
         let strips: Vec<(CurveView, CurveData<'_>)> = self
             .layout
@@ -1192,58 +1330,365 @@ impl Running {
         self.curves.set_palette(&self.gpu.queue, &self.lut);
     }
 
-    /// Holds each pane's average spectrum as an amber reference, or drops the one held.
-    fn toggle_reference(&mut self) {
-        self.reference = match self.reference {
-            Some(_) => None,
-            None if !self.latest.is_empty() => {
-                Some(self.latest.iter().map(|p| p.average.clone()).collect())
-            }
-            None => None,
-        };
-    }
-
-    /// Applies whatever the menu or keys changed since the last frame.
+    /// Applies whatever the menu, the keys or a preset changed since the last frame.
+    ///
+    /// The menu writes into the settings directly, so this compares them with what the
+    /// frame loop last acted on rather than being told what moved. Most settings are
+    /// read afresh every frame and need nothing here; these are the ones that own
+    /// something outside them, like the palette table, the analysis thread or the
+    /// window itself.
     fn apply_settings(&mut self) {
-        if self.ui == self.applied {
-            return;
+        let session = self.shell.session.clone();
+        if session.frozen != self.applied_session.frozen {
+            self.held = session.frozen.then(|| self.history.written());
         }
-        let (new, old) = (self.ui.clone(), self.applied.clone());
-        if new.frozen != old.frozen {
-            self.held = new.frozen.then(|| self.history.written());
+        if session.reference != self.applied_session.reference {
+            self.take_reference(session.reference);
         }
-        if new.palette != old.palette {
-            self.settings.palette = new.palette;
-            self.hue_shift = 0.0;
-            self.lut = palette::build_lut(new.palette);
-            self.spectrogram.set_palette(&self.gpu.queue, &self.lut);
-            self.curves.set_palette(&self.gpu.queue, &self.lut);
+        if session.follow != self.applied_session.follow {
+            self.now_playing.set_follow(session.follow.clone());
         }
-        let analysis_changed = new.rows_per_second != old.rows_per_second
-            || new.pair_mode != old.pair_mode
-            || new.scale != old.scale;
-        self.settings.rows_per_second = new.rows_per_second as f64;
-        self.settings.pair_mode = new.pair_mode;
-        self.settings.scale = new.scale;
-        if analysis_changed && let Some(audio) = &self.audio {
-            audio.set_config(AnalysisConfig::from_settings(&self.settings, self.columns));
-        }
-        if new.follow != old.follow {
-            self.now_playing.set_follow(new.follow.clone());
-        }
-        if new.present_mode != old.present_mode {
-            self.gpu.set_present_mode(new.present_mode);
+        if session.presentation != self.applied_session.presentation {
+            self.gpu
+                .set_present_mode(present_mode_of(session.presentation));
             self.pacing.break_sequence();
             self.presented.reset();
         }
-        if new.fullscreen != old.fullscreen {
+        if session.fullscreen != self.applied_session.fullscreen {
             self.window
-                .set_fullscreen(new.fullscreen.then_some(Fullscreen::Borderless(None)));
+                .set_fullscreen(session.fullscreen.then_some(Fullscreen::Borderless(None)));
             self.pacing.set_refresh_hz(
                 crate::present::compositor_refresh_hz().or_else(|| refresh_rate(&self.window)),
             );
             self.presented.reset();
         }
-        self.applied = self.ui.clone();
+        // A transport command is a one-off rather than a state, so it is taken rather
+        // than compared. A player that says it cannot do it refuses inside `send`.
+        if let Some(command) = self.shell.session.command.take() {
+            self.now_playing.send(command);
+        }
+        self.applied_session = self.shell.session.clone();
+
+        if self.settings == self.applied {
+            return;
+        }
+        if self.settings.palette != self.applied.palette {
+            self.hue_shift = 0.0;
+            self.lut = palette::build_lut(self.settings.palette);
+            self.spectrogram.set_palette(&self.gpu.queue, &self.lut);
+            self.curves.set_palette(&self.gpu.queue, &self.lut);
+        }
+        self.retune_analysis();
+        self.applied = self.settings.clone();
+    }
+
+    /// Tells the analysis thread what to measure, when that has changed.
+    ///
+    /// Everything analysis cares about is in one config, so comparing it catches a
+    /// change from the menu, a key or a preset without listing the fields twice.
+    fn retune_analysis(&mut self) {
+        let config = AnalysisConfig::from_settings(&self.settings, self.columns);
+        if config == self.config {
+            return;
+        }
+        self.config = config.clone();
+        if let Some(audio) = &self.audio {
+            audio.set_config(config);
+        }
+    }
+
+    /// Holds each pane's average spectrum as an amber reference, or drops the one held.
+    fn take_reference(&mut self, hold: bool) {
+        self.reference = match hold {
+            true if !self.latest.is_empty() => {
+                Some(self.latest.iter().map(|p| p.average.clone()).collect())
+            }
+            // Nothing measured yet: there is no spectrum to hold, so the switch goes
+            // back where it was rather than claiming a reference that isn't there.
+            true => {
+                self.shell.session.reference = false;
+                None
+            }
+            false => None,
+        };
+    }
+
+    /// Looks a key up in the menu and performs whatever it finds there.
+    fn press(&mut self, key: &Key) {
+        let Some(name) = crate::ui::key_name(key) else {
+            return;
+        };
+        let players = self.now_playing.players().to_vec();
+        let presentations: Vec<Presentation> = self
+            .gpu
+            .present_modes
+            .iter()
+            .map(|&m| presentation_of(m))
+            .collect();
+        let action = menu::action_for_key(
+            &menu::Context {
+                settings: &self.settings,
+                session: &self.shell.session,
+                players: &players,
+                presets: &self.presets,
+                controls: self.now_playing.controls(),
+                presentations: &presentations,
+            },
+            &name,
+        );
+        if let Some(action) = action {
+            self.shell.act(&action, &mut self.settings);
+            for ask in self.shell.take_asks() {
+                self.carry_out(&ask);
+            }
+        }
+    }
+
+    /// Does what the menu asked of the settings folder.
+    fn carry_out(&mut self, ask: &Ask) {
+        let Some(store) = &self.store else {
+            log::warn!("no settings folder, so presets cannot be saved or loaded");
+            return;
+        };
+        match ask {
+            Ask::Load(name) => match store.load_preset(name) {
+                Some(settings) => {
+                    log::info!("loaded the preset {name}");
+                    self.settings = settings;
+                }
+                None => log::error!("cannot read the preset {name}"),
+            },
+            Ask::Save(name) => match store.save_preset(name, &self.settings) {
+                Ok(replaced) => {
+                    log::info!(
+                        "{} the preset {name}",
+                        if replaced { "replaced" } else { "saved" }
+                    );
+                    self.presets = store.list_presets();
+                }
+                Err(e) => log::error!("cannot save the preset {name}: {e}"),
+            },
+            Ask::Delete(name) => {
+                if store.delete_preset(name) {
+                    log::info!("deleted the preset {name}");
+                    self.presets = store.list_presets();
+                } else {
+                    log::error!("cannot delete the preset {name}");
+                }
+            }
+        }
+    }
+
+    /// How far the furniture has faded this frame, and the pointer shown or hidden
+    /// to match.
+    ///
+    /// The chrome answers the pointer moving, not merely being somewhere: a still
+    /// pointer over the image is someone watching, which is what immersive mode is for.
+    fn fade(&mut self, now: Instant, area: &crate::ui::Area) -> f64 {
+        if area.hovered != self.pointer_was || area.clicked || area.double_clicked {
+            self.chrome.stir(now);
+        }
+        self.pointer_was = area.hovered;
+        // A menu or a dialog holds everything up: they are drawn over the furniture and
+        // are useless without it.
+        let holding = area.menu_open || self.shell.session.help;
+        let alpha = self.chrome.update(now, &self.settings, holding);
+        let hide = !self.chrome.cursor_visible();
+        if hide != self.cursor_hidden {
+            self.cursor_hidden = hide;
+            self.window.set_cursor_visible(!hide);
+        }
+        alpha
+    }
+
+    /// Performs the quick bar's button under the pointer, if one was clicked.
+    fn press_quick_bar(&mut self, ppp: f32) {
+        if !self.clicked {
+            return;
+        }
+        let Some(p) = self.pointer else { return };
+        let at = ((p.x * ppp).round() as i32, (p.y * ppp).round() as i32);
+        let Some(action) = self.quick_bar.hit(at.0, at.1).map(|b| b.action.clone()) else {
+            return;
+        };
+        self.shell.act(&action, &mut self.settings);
+        for ask in self.shell.take_asks() {
+            self.carry_out(&ask);
+        }
+    }
+
+    /// Presses whichever of the deck's transport buttons the pointer is on.
+    ///
+    /// The seek bar is a button too: clicking along it asks for that point in the
+    /// track. A player that says it cannot be asked refuses inside `send`, so a deck
+    /// that draws a button a player won't honour still does nothing rather than
+    /// something wrong.
+    fn press_deck(&mut self, ppp: f32, now: Instant) {
+        if !self.clicked || !self.settings.show_center_deck || !self.settings.deck_show_transport {
+            return;
+        }
+        let Some(p) = self.pointer else { return };
+        let (x, y) = ((p.x * ppp).round() as i32, (p.y * ppp).round() as i32);
+        let d = self.band.deck;
+        let command = if d.play.contains(x, y) {
+            Some(Transport::PlayPause)
+        } else if d.next.contains(x, y) {
+            Some(Transport::Next)
+        } else if d.prev.contains(x, y) {
+            Some(Transport::Previous)
+        } else if d.seek.contains(x, y) {
+            // Where along the bar it was clicked, as a fraction of the track.
+            self.now_playing
+                .position(now)
+                .filter(|&(_, length)| length > 0.0)
+                .map(|(_, length)| {
+                    let along = f64::from(x - d.seek.x) / f64::from(d.seek.w.max(1));
+                    Transport::SeekTo(Duration::from_secs_f64(along.clamp(0.0, 1.0) * length))
+                })
+        } else {
+            None
+        };
+        if let Some(command) = command {
+            self.now_playing.send(command);
+        }
+    }
+
+    /// Reads out whatever the pointer is over, and sends the player to that moment on
+    /// a double-click.
+    fn draw_hover(
+        &mut self,
+        map: &sonorant_core::dsp::FrequencyMap,
+        rows_per_second: f64,
+        ppp: f32,
+        now: Instant,
+        alpha: f64,
+        drawn: &Settings,
+    ) {
+        // The panes are laid out in physical pixels; the pointer arrives in points.
+        let at = match self.pointer {
+            Some(p) => ((p.x * ppp).round() as i32, (p.y * ppp).round() as i32),
+            None => return,
+        };
+        let Some(hovered) = hover::locate(
+            &self.layout,
+            map,
+            at,
+            f64::from(self.px_per_row()),
+            rows_per_second,
+        ) else {
+            return;
+        };
+
+        // A double-click over the image asks the player for the moment under the
+        // pointer. What is drawn there is that much older than the position the clock
+        // is carrying now.
+        if self.double_clicked
+            && self.settings.seek_on_image_click
+            && hovered.on_image
+            && let Some((position, _)) = self.now_playing.position(now)
+        {
+            let target = (position - hovered.age).max(0.0);
+            if self
+                .now_playing
+                .send(Transport::SeekTo(Duration::from_secs_f64(target)))
+            {
+                log::debug!("seeking to {target:.2} s, {:.2} s back", hovered.age);
+            }
+        }
+
+        // Every pane's level at that frequency when the hover is synced, otherwise the
+        // one the pointer is in. A pane whose curve is a different length belongs to a
+        // layout that has since changed, so it has nothing to say about this row.
+        let readings: Vec<Reading<'_>> = self
+            .layout
+            .panes
+            .iter()
+            .zip(&self.latest)
+            .enumerate()
+            .filter(|(i, _)| drawn.sync_hover || *i == hovered.pane)
+            .map(|(_, (pane, curves))| Reading {
+                label: pane.label,
+                db: curves
+                    .display
+                    .get(hovered.bin)
+                    .map_or(f64::NAN, |&db| f64::from(db)),
+            })
+            .collect();
+        hover::draw(
+            &mut self.overlay,
+            &Readout {
+                layout: &self.layout,
+                settings: drawn,
+                map,
+                hover: hovered,
+                levels: &readings,
+                alpha,
+                label_px: axes::label_px(&self.settings, ppp),
+            },
+        );
+    }
+
+    /// The settings as they are drawn, rather than as they are saved.
+    ///
+    /// Two things happen here. The desktop's accent colour fills in the hover slot when
+    /// no colour was chosen for it, standing in for the skin colours Nostalgia+ took
+    /// from MusicBee, without being written into the saved theme, so it follows the
+    /// desktop rather than freezing at whatever it was on the day. And every setting
+    /// that means a size on screen is scaled to the display, so the deck, the gutter
+    /// and the bars are the size they look at 100% however the screen is scaled. The
+    /// image, the scope and the lanes are left in physical pixels, where they keep
+    /// their detail.
+    fn drawn(&self, ppp: f32) -> Settings {
+        let mut s = self.settings.clone();
+        if s.theme.hover.is_none()
+            && let Some(accent) = self.appearance.accent
+        {
+            s.theme.hover = Some(accent);
+        }
+        if (ppp - 1.0).abs() > 0.01 {
+            let px = |n: i32| (n as f32 * ppp).round() as i32;
+            s.deck_height_px = px(s.deck_height_px);
+            s.gutter_width = px(s.gutter_width);
+            s.bar_size = px(s.bar_size);
+            s.led_segment = px(s.led_segment);
+        }
+        s
+    }
+
+    /// How long to leave between frames, or `None` to draw at the display's own rate.
+    ///
+    /// Nostalgia+'s `TargetFps` set how fast it redrew and, with it, how fast the image
+    /// scrolled. Here scrolling follows audio time whatever this is, so the cap only
+    /// decides how often the screen is redrawn: it is a way to give a weak machine or a
+    /// battery some room, not a way to change the picture.
+    fn frame_interval(&self) -> Option<Duration> {
+        match self.settings.frame_cap {
+            FrameCap::Display => None,
+            FrameCap::Fps60 => Some(Duration::from_nanos(1_000_000_000 / 60)),
+            FrameCap::Fps30 => Some(Duration::from_nanos(1_000_000_000 / 30)),
+        }
+    }
+
+    /// How many screen pixels one history row is drawn across.
+    fn px_per_row(&self) -> u32 {
+        self.settings.px_per_row.clamp(1, 8) as u32
+    }
+}
+
+/// The model's name for a backend present mode.
+fn presentation_of(mode: wgpu::PresentMode) -> Presentation {
+    match mode {
+        wgpu::PresentMode::Mailbox => Presentation::Newest,
+        wgpu::PresentMode::Immediate => Presentation::Immediate,
+        _ => Presentation::EveryRefresh,
+    }
+}
+
+/// The backend present mode the model means.
+fn present_mode_of(p: Presentation) -> wgpu::PresentMode {
+    match p {
+        Presentation::EveryRefresh => wgpu::PresentMode::Fifo,
+        Presentation::Newest => wgpu::PresentMode::Mailbox,
+        Presentation::Immediate => wgpu::PresentMode::Immediate,
     }
 }

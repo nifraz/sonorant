@@ -151,11 +151,17 @@ pub struct ScopeLayout {
 pub const AXIS_MARGIN: i32 = 30;
 
 impl ScopeLayout {
-    /// Lays out `bounds` for `s`. Single-channel modes get one full-width pane.
-    pub fn new(bounds: Rect, s: &Settings) -> ScopeLayout {
+    /// Lays out `bounds` for `s` at `scale` pixels per point. Single-channel modes get
+    /// one full-width pane.
+    ///
+    /// The panes themselves are in physical pixels, so the image keeps a row to a pixel
+    /// and loses no detail at 150%; the fixed sizes around them are scaled, so the
+    /// label columns and the scale strip stay the size they look on screen.
+    pub fn new(bounds: Rect, s: &Settings, scale: f32) -> ScopeLayout {
+        let px = |n: i32| (n as f32 * scale).round() as i32;
         // The repeated axis at both edges needs space of its own: overlaid on the graph
         // fill it's unreadable at these widths.
-        let wanted = AXIS_MARGIN + ((s.label_font_size - 7.0) * 3.0).max(0.0) as i32;
+        let wanted = px(AXIS_MARGIN + ((s.label_font_size - 7.0) * 3.0).max(0.0) as i32);
         let margin = if s.show_outer_labels && s.show_axis_labels && bounds.w > 6 * wanted {
             wanted
         } else {
@@ -172,14 +178,14 @@ impl ScopeLayout {
 
         let pane_count = s.pair_mode.pane_count() as i32;
         let gutter = if pane_count == 2 {
-            s.gutter_width.clamp(0, 90)
+            s.gutter_width.clamp(0, px(90))
         } else {
             0
         };
-        let lane_h = s.scale_lane_height();
+        let lane_h = px(s.scale_lane_height());
         let lane_top = s.scale_lane_pos == ScaleLanePosition::Top;
         let labels = s.pair_mode.pane_labels();
-        let pane_w = ((inner.w - gutter) / pane_count.max(1)).max(8);
+        let pane_w = ((inner.w - gutter) / pane_count.max(1)).max(px(8));
         let curve_width = pane_w * s.curve_width_pct.clamp(0, 60) / 100;
 
         // Mirroring the left pane puts both curves and both newest columns against the
@@ -255,7 +261,7 @@ mod tests {
             mirror_left_pane: true,
             ..Settings::default()
         };
-        let l = ScopeLayout::new(Rect::new(0, 0, 1200, 600), &s);
+        let l = ScopeLayout::new(Rect::new(0, 0, 1200, 600), &s, 1.0);
         assert!(!l.panes[0].curve_on_left && l.panes[1].curve_on_left);
         assert_eq!(l.panes[0].bounds.right(), l.gutter.x);
         assert_eq!(l.gutter.right(), l.panes[1].bounds.x);
@@ -264,7 +270,7 @@ mod tests {
     #[test]
     fn age_runs_away_from_the_curve() {
         let s = Settings::default();
-        let l = ScopeLayout::new(Rect::new(0, 0, 1200, 600), &s);
+        let l = ScopeLayout::new(Rect::new(0, 0, 1200, 600), &s, 1.0);
         let p = &l.panes[0];
         assert_eq!(p.age_at(p.spectro.x, 1.0), Some(0.0));
         assert_eq!(p.age_at(p.spectro.x + 120, 1.0), Some(120.0));

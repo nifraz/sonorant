@@ -9,6 +9,7 @@
 
 mod app;
 mod audio;
+mod chrome;
 mod gpu;
 mod nowplaying;
 mod options;

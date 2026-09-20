@@ -18,6 +18,16 @@ use crate::layout::{PaneLayout, Rect};
 /// Measures a string's width in pixels at the label font size.
 pub type MeasureWidth<'a> = &'a mut dyn FnMut(&str) -> f32;
 
+/// A fixed pixel size at the display's scaling.
+///
+/// Every number in this file is a size at 100%, as Nostalgia+ wrote them. At 150% a
+/// deck laid out in raw pixels is two-thirds the size it should be, so each one passes
+/// through here on its way to a rectangle. Text is already scaled before it gets here:
+/// widths come from `measure`, which shapes at the display's own pixel size.
+fn at(n: i32, scale: f32) -> i32 {
+    (n as f32 * scale).round() as i32
+}
+
 /// Air around the deck's blocks.
 const PAD: i32 = 6;
 /// The least width the transport block is worth giving.
@@ -62,23 +72,25 @@ impl DeckLayout {
     /// the text they carry.
     pub const PREFERRED_HEIGHT: i32 = 92;
 
-    /// Lays the deck out in `gap`, measuring text with `measure`.
-    pub fn new(gap: Rect, s: &Settings, measure: MeasureWidth<'_>) -> DeckLayout {
+    /// Lays the deck out in `gap`, measuring text with `measure`. `scale` is the
+    /// display's pixels per point, so the fixed sizes keep their size on screen.
+    pub fn new(gap: Rect, s: &Settings, scale: f32, measure: MeasureWidth<'_>) -> DeckLayout {
         let mut d = DeckLayout {
             bounds: gap,
             ..DeckLayout::default()
         };
-        if gap.w <= 40 || gap.h <= 24 {
+        let pad = at(PAD, scale);
+        if gap.w <= at(40, scale) || gap.h <= at(24, scale) {
             return d;
         }
-        let h = gap.h - PAD * 2;
-        let y = gap.y + PAD;
+        let h = gap.h - pad * 2;
+        let y = gap.y + pad;
 
         // The goniometer first, and in the middle, because it's the one thing here that
         // belongs to both channels at once. A fifth of the width: there are two blocks
         // either side of it that need the room more.
         let square = h.min(gap.w / 5);
-        if s.deck_show_goniometer && square >= 24 {
+        if s.deck_show_goniometer && square >= at(24, scale) {
             d.goniometer = Rect::new(
                 gap.x + gap.w / 2 - square / 2,
                 y + (h - square) / 2,
@@ -88,14 +100,19 @@ impl DeckLayout {
         }
         let mid = gap.x + gap.w / 2;
         let (left_end, right_start) = if d.goniometer.w > 0 {
-            (d.goniometer.x - PAD, d.goniometer.right() + PAD)
+            (d.goniometer.x - pad, d.goniometer.right() + pad)
         } else {
-            (mid - PAD, mid + PAD)
+            (mid - pad, mid + pad)
         };
-        d.layout_left(Rect::new(gap.x + PAD, y, left_end - (gap.x + PAD), h), s);
-        d.layout_right(
-            Rect::new(right_start, y, gap.right() - PAD - right_start, h),
+        d.layout_left(
+            Rect::new(gap.x + pad, y, left_end - (gap.x + pad), h),
             s,
+            scale,
+        );
+        d.layout_right(
+            Rect::new(right_start, y, gap.right() - pad - right_start, h),
+            s,
+            scale,
             measure,
         );
         d
@@ -103,24 +120,25 @@ impl DeckLayout {
 
     /// Artwork then metadata. The artwork goes first when the text is squeezed: half a
     /// cover with no room to say what it's the cover of is the wrong trade.
-    fn layout_left(&mut self, r: Rect, s: &Settings) {
-        if r.w < 40 || r.h < 20 {
+    fn layout_left(&mut self, r: Rect, s: &Settings, scale: f32) {
+        let (pad, info_min) = (at(PAD, scale), at(INFO_MIN, scale));
+        if r.w < at(40, scale) || r.h < at(20, scale) {
             return;
         }
-        let mut square = if s.deck_show_artwork && r.h >= 24 {
+        let mut square = if s.deck_show_artwork && r.h >= at(24, scale) {
             r.h.min(r.w / 2)
         } else {
             0
         };
-        if square > 0 && s.deck_show_track_info && r.w - square - PAD < INFO_MIN {
+        if square > 0 && s.deck_show_track_info && r.w - square - pad < info_min {
             square = 0;
         }
         let mut x = r.x;
-        if square >= 24 {
+        if square >= at(24, scale) {
             self.art = Rect::new(x, r.y, square, r.h);
-            x += square + PAD;
+            x += square + pad;
         }
-        if s.deck_show_track_info && r.right() - x >= INFO_MIN {
+        if s.deck_show_track_info && r.right() - x >= info_min {
             self.info = Rect::new(x, r.y, r.right() - x, r.h);
         }
     }
@@ -128,8 +146,9 @@ impl DeckLayout {
     /// The transport block, then the readout grid. The grid sheds columns from the
     /// right until the transport has room to stay usable; the readouts are in priority
     /// order, so brightness and tempo go first and the LUFS figures last.
-    fn layout_right(&mut self, r: Rect, s: &Settings, measure: MeasureWidth<'_>) {
-        if r.w < 40 || r.h < 20 {
+    fn layout_right(&mut self, r: Rect, s: &Settings, scale: f32, measure: MeasureWidth<'_>) {
+        let pad = at(PAD, scale);
+        if r.w < at(40, scale) || r.h < at(20, scale) {
             return;
         }
         let player = s.deck_show_transport;
@@ -137,27 +156,30 @@ impl DeckLayout {
         let meters = corr as i32 + bal as i32;
         let stack = player || meters > 0;
 
-        let loud_col = LOUD_COL + ((s.label_font_size - 7.0).max(0.0) * 5.0) as i32;
+        let loud_col = at(
+            LOUD_COL + ((s.label_font_size - 7.0).max(0.0) * 5.0) as i32,
+            scale,
+        );
         // A caption over a value, plus air. Three rows at a tall deck turns nine
         // readouts into three columns instead of five.
-        let cell = (s.label_font_size * 4.6) as i32 + 4;
+        let cell = at((s.label_font_size * 4.6) as i32 + 4, scale);
         let rows = (r.h / cell.max(1)).clamp(2, 3);
         let mut cols = (loud_count(s) + rows - 1) / rows;
 
         let m = if stack {
-            StackMetrics::measure(r.h, measure, player, meters)
+            StackMetrics::measure(r.h, scale, measure, player, meters)
         } else {
             StackMetrics::default()
         };
-        let reserve = if stack { MIN_STACK + PAD } else { 0 };
+        let reserve = if stack { at(MIN_STACK, scale) + pad } else { 0 };
         // Measured rather than guessed: three buttons, the longest clock and a bar
         // worth aiming at, all of which depend on the font and the deck's height.
         let want = if stack && player {
             m.cap.max(m.buttons as f32) as i32
-                + BAR_GAP * 2
-                + MIN_SEEK
+                + at(BAR_GAP, scale) * 2
+                + at(MIN_SEEK, scale)
                 + m.val.max(m.clock) as i32
-                + PAD
+                + pad
         } else {
             reserve
         };
@@ -173,11 +195,11 @@ impl DeckLayout {
 
         let mut x = r.x;
         if stack {
-            let w = r.w - if cols > 0 { cols * loud_col + PAD } else { 0 };
-            if w >= 60 {
+            let w = r.w - if cols > 0 { cols * loud_col + pad } else { 0 };
+            if w >= at(60, scale) {
                 self.stack = Rect::new(x, r.y, w, r.h);
-                self.layout_stack(player, corr, bal, &m);
-                x = self.stack.right() + PAD;
+                self.layout_stack(player, corr, bal, scale, &m);
+                x = self.stack.right() + pad;
             }
         }
         if cols > 0 && r.right() - x >= cols * loud_col {
@@ -191,36 +213,37 @@ impl DeckLayout {
     /// Rows down the block: the transport with its seek bar, then whichever meters are
     /// switched on. Sharing one row with the buttons gives a row back to the metadata
     /// opposite, and puts all three bars in one column so they start and end together.
-    fn layout_stack(&mut self, player: bool, corr: bool, bal: bool, m: &StackMetrics) {
+    fn layout_stack(&mut self, player: bool, corr: bool, bal: bool, scale: f32, m: &StackMetrics) {
         let meters = corr as i32 + bal as i32;
         if !player && meters == 0 {
             return;
         }
+        let (gap, bar_gap) = (at(6, scale), at(BAR_GAP, scale));
         let mut rows = player as i32 + meters;
         let mut row_h = self.stack.h / rows;
-        let mut btn = (row_h - 2).clamp(12, 28);
-        let mut buttons = if player { (btn + 6) * 3 - 6 } else { 0 };
+        let mut btn = (row_h - at(2, scale)).clamp(at(12, scale), at(28, scale));
+        let mut buttons = if player { (btn + gap) * 3 - gap } else { 0 };
         let mut widest = m.cap.max(buttons as f32);
         // Half a seek bar is worse than an extra row: you can't drop a cursor on thirty
         // pixels.
         let one_row = !player
-            || self.stack.w as f32 - widest - m.val.max(m.clock) - (BAR_GAP * 2) as f32
-                >= MIN_SEEK as f32;
+            || self.stack.w as f32 - widest - m.val.max(m.clock) - (bar_gap * 2) as f32
+                >= at(MIN_SEEK, scale) as f32;
         if !one_row {
             rows += 1; // the seek bar gets one of its own
             row_h = self.stack.h / rows;
-            btn = (row_h - 2).clamp(12, 28);
-            buttons = (btn + 6) * 3 - 6;
+            btn = (row_h - at(2, scale)).clamp(at(12, scale), at(28, scale));
+            buttons = (btn + gap) * 3 - gap;
             widest = if meters > 0 { m.cap } else { buttons as f32 };
         }
-        if row_h < 10 {
+        if row_h < at(10, scale) {
             return;
         }
 
-        let mut bar_left = self.stack.x + widest as i32 + BAR_GAP;
+        let mut bar_left = self.stack.x + widest as i32 + bar_gap;
         let mut bar_right =
-            self.stack.right() - m.val.max(if one_row { m.clock } else { 0.0 }) as i32 - BAR_GAP;
-        if bar_right - bar_left < 24 {
+            self.stack.right() - m.val.max(if one_row { m.clock } else { 0.0 }) as i32 - bar_gap;
+        if bar_right - bar_left < at(24, scale) {
             bar_left = 0;
             bar_right = 0;
         } else {
@@ -231,17 +254,17 @@ impl DeckLayout {
         if player {
             let by = y + (row_h - btn) / 2;
             self.prev = Rect::new(self.stack.x, by, btn, btn);
-            self.play = Rect::new(self.stack.x + btn + 6, by, btn, btn);
-            self.next = Rect::new(self.stack.x + (btn + 6) * 2, by, btn, btn);
+            self.play = Rect::new(self.stack.x + btn + gap, by, btn, btn);
+            self.next = Rect::new(self.stack.x + (btn + gap) * 2, by, btn, btn);
             let clock_x = if one_row {
                 self.stack.right() - m.clock as i32
             } else {
-                self.next.right() + BAR_GAP
+                self.next.right() + bar_gap
             };
             self.clock = Rect::new(clock_x, y, (self.stack.right() - clock_x).max(0), row_h);
             y += row_h;
 
-            let seek_h = (row_h / 3).clamp(5, 10);
+            let seek_h = (row_h / 3).clamp(at(5, scale), at(10, scale));
             if one_row {
                 if bar_right > bar_left {
                     self.seek = Rect::new(
@@ -278,12 +301,19 @@ struct StackMetrics {
 }
 
 impl StackMetrics {
-    fn measure(height: i32, measure: MeasureWidth<'_>, player: bool, meters: i32) -> StackMetrics {
+    fn measure(
+        height: i32,
+        scale: f32,
+        measure: MeasureWidth<'_>,
+        player: bool,
+        meters: i32,
+    ) -> StackMetrics {
         let mut m = StackMetrics::default();
+        let gap = at(6, scale);
         let rows = player as i32 + meters;
         let row_h = if rows > 0 { height / rows } else { 0 };
-        m.btn = (row_h - 2).clamp(12, 28);
-        m.buttons = if player { (m.btn + 6) * 3 - 6 } else { 0 };
+        m.btn = (row_h - at(2, scale)).clamp(at(12, scale), at(28, scale));
+        m.buttons = if player { (m.btn + gap) * 3 - gap } else { 0 };
         if meters > 0 {
             m.cap = measure("CORR").max(measure("BAL"));
             m.val = measure("+0.00");
@@ -330,15 +360,15 @@ impl BandLayout {
     ///
     /// One band carries both the lanes and the deck, so switching the lanes off doesn't
     /// take the deck with them, and a thin waveform doesn't crush it.
-    pub fn height_for(s: &Settings, view_height: i32) -> i32 {
+    pub fn height_for(s: &Settings, view_height: i32, scale: f32) -> i32 {
         let mut band = wave_height(s, view_height);
         if s.show_center_deck {
-            let want = DeckLayout::PREFERRED_HEIGHT.max(s.deck_height_px);
+            let want = at(DeckLayout::PREFERRED_HEIGHT, scale).max(s.deck_height_px);
             band = band.max((view_height / 3).min(want));
         }
         // A docked panel is a few hundred pixels tall, and a deck that leaves no
         // spectrogram is not a trade anyone wants.
-        band.min((view_height - 60).max(0))
+        band.min((view_height - at(60, scale)).max(0))
     }
 
     /// Places the lanes and the deck in `view`. Call after the panes are laid out: the
@@ -348,6 +378,7 @@ impl BandLayout {
         band_h: i32,
         s: &Settings,
         panes: &[PaneLayout],
+        scale: f32,
         measure: MeasureWidth<'_>,
     ) -> BandLayout {
         let mut b = BandLayout::default();
@@ -379,13 +410,13 @@ impl BandLayout {
                 }
             }
             if deck.w == 0 {
-                let dw = 700.min(view.w - 40);
+                let dw = at(700, scale).min(view.w - at(40, scale));
                 if dw > 0 {
                     deck = Rect::new(view.x + (view.w - dw) / 2, b.band.y, dw, band_h);
                 }
             }
         }
-        b.deck = DeckLayout::new(deck, s, measure);
+        b.deck = DeckLayout::new(deck, s, scale, measure);
         b
     }
 }
@@ -415,7 +446,7 @@ mod tests {
     #[test]
     fn a_wide_gap_fits_everything_without_overlaps() {
         let s = Settings::default();
-        let d = DeckLayout::new(Rect::new(0, 0, 1200, 130), &s, &mut segoe_7pt);
+        let d = DeckLayout::new(Rect::new(0, 0, 1200, 130), &s, 1.0, &mut segoe_7pt);
         assert!(d.art.w > 0 && d.info.w > 0 && d.goniometer.w > 0);
         assert!(d.stack.w > 0 && d.loudness.w > 0);
         assert!(d.art.right() <= d.info.x);
@@ -456,24 +487,24 @@ mod tests {
             *on = false;
         }
         let gap = Rect::new(0, 0, 1200, 130);
-        let off = DeckLayout::new(gap, &s, &mut segoe_7pt);
+        let off = DeckLayout::new(gap, &s, 1.0, &mut segoe_7pt);
         assert_eq!((off.info.w, off.loudness.w), (0, 0));
         assert!(off.goniometer.w > 0);
 
         s.deck_show_lufs_m = true;
         s.deck_show_true_peak = true;
-        let two = DeckLayout::new(gap, &s, &mut segoe_7pt).loudness.w;
+        let two = DeckLayout::new(gap, &s, 1.0, &mut segoe_7pt).loudness.w;
         s.deck_show_lufs_s = true;
         s.deck_show_crest = true;
-        let four = DeckLayout::new(gap, &s, &mut segoe_7pt).loudness.w;
+        let four = DeckLayout::new(gap, &s, 1.0, &mut segoe_7pt).loudness.w;
         assert!(two > 0 && two * 2 == four, "{two} then {four}");
     }
 
     #[test]
     fn a_taller_deck_spends_height_instead_of_width() {
         let s = Settings::default();
-        let tall = DeckLayout::new(Rect::new(0, 0, 1200, 130), &s, &mut segoe_7pt);
-        let short = DeckLayout::new(Rect::new(0, 0, 1200, 84), &s, &mut segoe_7pt);
+        let tall = DeckLayout::new(Rect::new(0, 0, 1200, 130), &s, 1.0, &mut segoe_7pt);
+        let short = DeckLayout::new(Rect::new(0, 0, 1200, 84), &s, 1.0, &mut segoe_7pt);
         assert!(short.loudness.w > tall.loudness.w);
         assert_eq!(tall.loud_rows, 3);
         assert_eq!(short.loud_rows, 2);
@@ -483,9 +514,9 @@ mod tests {
     fn the_band_holds_both_the_lanes_and_the_deck() {
         let s = Settings::default();
         // The deck's height wins over a thin waveform.
-        let h = BandLayout::height_for(&s, 900);
+        let h = BandLayout::height_for(&s, 900, 1.0);
         assert_eq!(h, s.deck_height_px.max(DeckLayout::PREFERRED_HEIGHT));
         // And on a short view neither takes more than a third of it.
-        assert_eq!(BandLayout::height_for(&s, 100), 33);
+        assert_eq!(BandLayout::height_for(&s, 100, 1.0), 33);
     }
 }
