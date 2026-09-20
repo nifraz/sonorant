@@ -1643,7 +1643,9 @@ impl Running {
         if s.theme.hover.is_none()
             && let Some(accent) = self.appearance.accent
         {
-            s.theme.hover = Some(accent);
+            // Lifted first: an accent is chosen against the desktop's background, and a
+            // dark one drawn over the visuals would make "on" read as off.
+            s.theme.hover = Some(sonorant_render::colour::as_ink(accent));
         }
         if (ppp - 1.0).abs() > 0.01 {
             let px = |n: i32| (n as f32 * ppp).round() as i32;
