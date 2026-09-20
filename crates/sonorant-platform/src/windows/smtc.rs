@@ -122,7 +122,11 @@ impl Drop for SmtcSession {
     }
 }
 
-/// The worker: opens the manager, subscribes, and keeps the snapshot up to date.
+/// The worker's thread: COM for as long as the work, and not a moment less.
+///
+/// Every WinRT object has to be released before `CoUninitialize`, so they all live
+/// inside [`watch`] and are dropped when it returns. Releasing one afterwards is a
+/// use-after-free, and it segfaults on the way out rather than anywhere useful.
 fn run(
     shared: &Shared,
     ready: &AtomicBool,
@@ -131,14 +135,26 @@ fn run(
 ) {
     // SAFETY: balanced by the CoUninitialize below, on this thread only.
     let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
+    watch(shared, ready, tx, rx);
+    if com {
+        // SAFETY: balances the successful CoInitializeEx above, and everything WinRT
+        // handed us was dropped when `watch` returned.
+        unsafe { CoUninitialize() };
+    }
+}
+
+/// Opens the manager, subscribes, and keeps the snapshot up to date until asked to
+/// stop. Owns every WinRT object the worker touches.
+fn watch(
+    shared: &Shared,
+    ready: &AtomicBool,
+    tx: &SyncSender<Msg>,
+    rx: &std::sync::mpsc::Receiver<Msg>,
+) {
     let manager = match Manager::RequestAsync().and_then(|op| op.join()) {
         Ok(m) => m,
         Err(e) => {
             log::warn!("no media session manager: {e}; now playing will be empty");
-            if com {
-                // SAFETY: balances the successful CoInitializeEx above.
-                unsafe { CoUninitialize() };
-            }
             return;
         }
     };
@@ -238,10 +254,6 @@ fn run(
             0 => manager.RemoveSessionsChanged(token),
             _ => manager.RemoveCurrentSessionChanged(token),
         };
-    }
-    if com {
-        // SAFETY: balances the successful CoInitializeEx above.
-        unsafe { CoUninitialize() };
     }
 }
 
