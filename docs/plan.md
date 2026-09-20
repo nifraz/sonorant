@@ -57,11 +57,13 @@ possible, and follows whatever player is running instead of living inside one.
 
 ## Progress
 
-*As of 2026-09-20.* Phases 0 to 5 are written, apart from the checks that need other
+*As of 2026-09-21.* Phases 0 to 5 are written, apart from the checks that need other
 machines, a real player or CI. Every piece Phase 3 deferred has now arrived: the
-backdrop in Phase 4, and the harmonic ruler and the quick bar here. The three targets
-missed at the start are met or explained (see [Measurements](#measurements)). Phase 6
-begins at [Next](#next).
+backdrop in Phase 4, and the harmonic ruler and the quick bar in Phase 5. The three
+targets missed at the start are met or explained (see [Measurements](#measurements)).
+Phase 6 is under way: the phosphor scope and the zoomable long history are in, and what
+is left is at [Next](#next). A Linux machine has now built and run the app, so the
+PipeWire capture compiles for the first time and lavapipe has a golden of its own.
 
 **Phase 0 (repository, CI, skeleton): done, except clean frame pacing and CI**
 
@@ -307,13 +309,62 @@ top corners.
 - [ ] **The transport and the seek bar against a real player.** They are wired to the
   same `send` Phase 4 left guarded, and nothing has pressed them with a player running.
 
+**Phase 6 (new visuals): two of the five are in**
+
+- [x] **The phosphor scope** (`render/phosphor.rs`). The goniometer keeps a
+  floating-point accumulator between frames, fades it by how much real time has passed
+  and adds the new trace on top, so a quick sweep leaves a dim tail and a held note burns
+  in. Frame-rate independent by construction, which took two things: the trace is the
+  samples that really passed since the last frame rather than a fixed count, and the
+  deposit is scaled to what a continuous one would have left, because a frame lays its
+  whole trace down at once where a phosphor is written while it fades. Without the second
+  of those, 30 frames a second settles about 12% brighter than 120. The fade is a
+  full-target quad with the blend constant as the destination factor, which scales the
+  accumulator in place rather than ping-ponging through a second copy. The glow is the
+  accumulator shrunk and blurred rather than a threshold of it, at a half rather than the
+  window bloom's eighth: on a phosphor every lit pixel halos, and an eighth of eighty
+  pixels reaches across the whole square. Three settings: the scope, its persistence and
+  its intensity.
+- [x] **The curves use it too**, on a switch of their own, sharing the scope's
+  persistence and intensity. Only the line style has a line to smear. `Deposit` names the
+  difference between the two kinds of trace, which is not cosmetic: the scope's points
+  are samples along a path the signal really travelled, so each crossing lays down the
+  same light, while a curve arrives once a frame however long the frame was, so the light
+  has to carry the frame's length itself.
+- [x] **The zoomable long history.** The wheel zooms time about the pointer, dragging
+  pans, and `End` or the Live button returns to now. Neither needed a line of shader: the
+  zoom is the rows a pane asks for and the pan is the row its newest edge sits on, which
+  is the anchor freeze already had. Freeze and parking are kept as two states on purpose
+  (see [Next](#next)). History length is a setting, 1 to 15 minutes, and the store is
+  sized from it and the scroll speed rather than from five minutes at whatever speed the
+  app started with, which was the carried-over bug. A 256 MB budget caps it, because a
+  row costs 8 KB whatever the speed; the default comes to 5.7 minutes and 160 MB, against
+  the plan's 300 MB target, and the app logs the reach it settled on.
+- [ ] The 3D waterfall, the beat-reactive backdrop and the quality setting.
+- [ ] **Done when:** each visual has golden images, and with everything on a frame stays
+  under 6 ms of GPU time at 1440p on an integrated GPU. The phosphor and the history view
+  have their pictures and their tests; the 1440p figure waits for the rest.
+
 ### Next
 
-Phase 6, the new visuals: the phosphor scope, the zoomable long history, the 3D
-waterfall, the beat-reactive backdrop and the quality setting. The history store already
-holds more than the screen shows and the spectrogram pass already maps any axis and range
-per pixel, so zooming is mostly a matter of what the panes ask it for; `px_per_row` and
-the hover's age-at-a-column arithmetic are the beginnings of it.
+Phase 6's last three: the 3D waterfall, the beat-reactive backdrop and the quality
+setting. The waterfall wants the history store's mip chain, which the
+[history store](#history-store) section describes and nothing has built yet: a zoomed-out
+view reads a coarser level instead of aliasing, and the mesh reads it too.
+
+**Two states, not one, for a still image.** `Space` freezes the image where it is; the
+wheel and a drag park it somewhere in the history. They are held apart, and a parked view
+wins. Rolling them into one flag looked tidier and was wrong: zooming away from now
+switched the freeze on, and then zooming back could not switch it off. The parked anchor
+is an absolute row rather than a distance back, for the same reason in the other
+direction: rows keep arriving behind a parked view, and a distance would carry the image
+forward with them. Both were found by writing the tests, not by watching the screen.
+
+**One sweep per submit.** `Queue::write_buffer` does not write where it is called but at
+the start of the next submit, so two phosphor sweeps recorded into one command buffer
+both draw the second one's points. A frame does the right thing without trying; a test
+that wants a history has to submit between sweeps, as a frame does. It made the scene
+golden's "two sweeps" a redraw of one before it was noticed.
 
 **A flaky golden, found here and not caused here, and now known to be WARP's.**
 `the_scene_renders_as_it_did` fails about one run in three on WARP, always on the same
@@ -816,8 +867,8 @@ Phase 0 has no dependencies. Phases 1 and 2 can run in parallel after it.
 - [x] Display-rate rendering with scrolling driven by audio time
 - [x] Capture only the player's audio
 - [x] Palette, axis and zoom changes redraw the whole history
-- [ ] Phosphor scope with bloom
-- [ ] Zoomable long history
+- [x] Phosphor scope with bloom
+- [x] Zoomable long history
 - [ ] 3D waterfall view
 - [ ] Beat-reactive shader backdrop
 - [x] Screen stays awake while fullscreen and playing
