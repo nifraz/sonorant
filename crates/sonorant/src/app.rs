@@ -11,11 +11,11 @@ use sonorant_core::runtime::PaneCurves;
 use sonorant_core::settings::{FrameCap, Settings};
 use sonorant_core::store::{self, Store};
 use sonorant_render::{
-    ArtworkPass, BackdropPass, BandLayout, BeatPhase, CurveData, CurveLook, CurvePass, CurveView,
-    DeckState, Deposit, FieldView, GpuTimer, HistoryStore, Layer, Overlay, PaneView, Phosphor,
-    PhosphorLook, QuickBar, Readback, Reading, Readout, Rect, Rgba, RowIn, ScopeLayout,
-    SpectrogramPass, Sweep, Visuals, WaveRing, axes, bloom, curves, deck, hover, phosphor,
-    quickbar,
+    ArtworkPass, BackdropPass, BandLayout, BeatPhase, Camera, CurveData, CurveLook, CurvePass,
+    CurveView, DeckState, Deposit, FieldView, GpuTimer, HistoryStore, Landscape, Layer, Overlay,
+    PaneView, Phosphor, PhosphorLook, QuickBar, Readback, Reading, Readout, Rect, Rgba, RowIn,
+    ScopeLayout, SpectrogramPass, Sweep, Visuals, WaterfallPass, WaveRing, axes, bloom, curves,
+    deck, hover, phosphor, quickbar, waterfall,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
@@ -45,6 +45,10 @@ const STATUS_EVERY: Duration = Duration::from_millis(250);
 const COLOUR_BAR_WIDTH: i32 = 40;
 /// A frame interval this long is logged with where the time went.
 const STALL: Duration = Duration::from_millis(100);
+/// How much more history the landscape shows than a flat pane does at the same zoom.
+/// A pane is as deep as it is wide here, so the surface recedes into a useful stretch of
+/// the past rather than showing the same few seconds lying down.
+const WATERFALL_DEPTH: f32 = 2.5;
 /// Bytes one row of history costs on the GPU: the grid, as Float16 pairs.
 const ROW_BYTES: u64 = GRID_BINS as u64 * 4;
 /// The most the history store may take. The plan's memory target is under 300 MB with
@@ -106,6 +110,9 @@ struct Running {
     /// What each pass costs on the GPU.
     timer: GpuTimer,
     curves: CurvePass,
+    /// The history as a landscape, and where the eye is looking at it from.
+    waterfall: WaterfallPass,
+    camera: Camera,
     /// The field of light behind the analysis, and where the beat is in it.
     backdrop: BackdropPass,
     beat: BeatPhase,
@@ -297,6 +304,9 @@ impl App {
         let lut = palette::build_lut(settings.palette);
         spectrogram.set_palette(&gpu.queue, &lut);
         let curves = CurvePass::new(&gpu.device, gpu.config.format);
+        let mut waterfall = WaterfallPass::new(&gpu.device, bloom::TARGET_FORMAT);
+        waterfall.bind(&gpu.device, &history);
+        waterfall.set_palette(&gpu.queue, &lut);
         let backdrop = BackdropPass::new(&gpu.device, bloom::TARGET_FORMAT);
         let phosphor = Phosphor::new(&gpu.device, gpu.config.format);
         let curve_phosphor = [
@@ -315,7 +325,14 @@ impl App {
         let timer = GpuTimer::new(
             &gpu.device,
             &gpu.queue,
-            &["visuals", "glow", "composite", "furniture", "ui"],
+            &[
+                "visuals",
+                "landscape",
+                "glow",
+                "composite",
+                "furniture",
+                "ui",
+            ],
         );
         if !timer.is_available() {
             log::info!("this GPU has no timestamp queries; pass times won't be shown");
@@ -393,6 +410,8 @@ impl App {
             brightness: 0.0,
             hue_shift: 0.0,
             scope: (Vec::new(), Vec::new()),
+            waterfall,
+            camera: Camera::default(),
             backdrop,
             beat: BeatPhase::default(),
             phosphor,
@@ -956,7 +975,12 @@ impl Running {
                 0.0
             },
         };
-        axes::draw(&mut self.overlay, &scales);
+        // The frequency grid, the time marks and the level scale all belong to a flat
+        // pane. Over a landscape they would be lines drawn across a picture they have
+        // nothing to do with, so the landscape carries its own axis or none.
+        if !self.settings.waterfall {
+            axes::draw(&mut self.overlay, &scales);
+        }
         if self.settings.immersive && self.settings.imm_beat_reactive {
             // The flare is part of the picture rather than furniture, so it stays when
             // the chrome has gone.
@@ -1014,7 +1038,9 @@ impl Running {
             label_px,
         );
         self.press_deck(ppp, now);
-        self.draw_hover(&map, rps, ppp, now, alpha, &drawn);
+        if !self.settings.waterfall {
+            self.draw_hover(&map, rps, ppp, now, alpha, &drawn);
+        }
         // A full-screen analyser with music playing has no keypresses and no pointer
         // movement, which is exactly what a screen blanks for.
         self.awake
@@ -1132,11 +1158,46 @@ impl Running {
                     },
                 );
             }
-            self.spectrogram.draw(&mut pass, &panes);
+            if !self.settings.waterfall {
+                self.spectrogram.draw(&mut pass, &panes);
+            }
+        }
+        // The landscape goes in a pass of its own, because it needs a depth buffer and
+        // the flat views do not. The backdrop it loads over is its sky.
+        if self.settings.waterfall {
+            let bg = palette::background(&self.lut);
+            let landscape = Landscape {
+                camera: self.camera,
+                rect: self.layout.bounds,
+                framebuffer: self.visuals.size(),
+                held: self.held,
+                sheen: true,
+                channel: 0,
+                span_rows: panes
+                    .first()
+                    .map_or(600.0, |p| p.visible_rows * WATERFALL_DEPTH),
+                frac: panes.first().map_or(0.0, |p| p.frac),
+                scale: map.scale,
+                fmin: map.fmin as f32,
+                fmax: map.fmax as f32,
+                global_range: None,
+                background: Rgba::argb(255, bg.r, bg.g, bg.b),
+            };
+            self.waterfall.draw(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &mut encoder,
+                waterfall::Target {
+                    view: self.visuals.view(),
+                    timestamps: self.timer.writes(1),
+                },
+                &self.history,
+                &landscape,
+            );
         }
         if glow {
             self.visuals
-                .build_glow(&self.gpu.queue, &mut encoder, self.timer.writes(1));
+                .build_glow(&self.gpu.queue, &mut encoder, self.timer.writes(2));
         }
         {
             let mut pass = encoder
@@ -1152,7 +1213,7 @@ impl Running {
                         },
                     })],
                     depth_stencil_attachment: None,
-                    timestamp_writes: self.timer.writes(2),
+                    timestamp_writes: self.timer.writes(3),
                     occlusion_query_set: None,
                     multiview_mask: None,
                 })
@@ -1236,13 +1297,15 @@ impl Running {
                         },
                     })],
                     depth_stencil_attachment: None,
-                    timestamp_writes: self.timer.writes(3),
+                    timestamp_writes: self.timer.writes(4),
                     occlusion_query_set: None,
                     multiview_mask: None,
                 })
                 .forget_lifetime();
             self.overlay.draw(Layer::Under, &mut pass);
-            self.curves.draw(&mut pass);
+            if !self.settings.waterfall {
+                self.curves.draw(&mut pass);
+            }
             if curve_scope.is_some() {
                 let size = (self.gpu.config.width, self.gpu.config.height);
                 for screen in &self.curve_phosphor {
@@ -1278,7 +1341,7 @@ impl Running {
                         },
                     })],
                     depth_stencil_attachment: None,
-                    timestamp_writes: self.timer.writes(4),
+                    timestamp_writes: self.timer.writes(5),
                     occlusion_query_set: None,
                     multiview_mask: None,
                 })
@@ -1551,6 +1614,7 @@ impl Running {
         self.hue_shift = want;
         self.lut = palette::build_lut_shifted(self.settings.palette, want);
         self.spectrogram.set_palette(&self.gpu.queue, &self.lut);
+        self.waterfall.set_palette(&self.gpu.queue, &self.lut);
         self.curves.set_palette(&self.gpu.queue, &self.lut);
     }
 
@@ -1583,6 +1647,7 @@ impl Running {
             self.history_rows = rows;
             self.history = HistoryStore::new(&self.gpu.device, GRID_BINS as u32, rows);
             self.spectrogram.bind(&self.gpu.device, &self.history);
+            self.waterfall.bind(&self.gpu.device, &self.history);
             self.held = None;
             self.frozen_at = None;
             self.parked_at = None;
@@ -1631,6 +1696,7 @@ impl Running {
             self.hue_shift = 0.0;
             self.lut = palette::build_lut(self.settings.palette);
             self.spectrogram.set_palette(&self.gpu.queue, &self.lut);
+            self.waterfall.set_palette(&self.gpu.queue, &self.lut);
             self.curves.set_palette(&self.gpu.queue, &self.lut);
         }
         self.retune_analysis();
@@ -1963,9 +2029,15 @@ impl Running {
             self.settle_view();
             return;
         }
+        // A notch of the wheel is about 50 points.
+        let notches = f64::from(area.scrolled) / 50.0;
         let turned = area.scrolled.abs() > 0.01;
-        let dragged = area.dragged.unwrap_or(0.0);
-        if !turned && dragged == 0.0 {
+        let dragged = area.dragged.unwrap_or(egui::Vec2::ZERO);
+        if self.settings.waterfall {
+            self.move_the_camera(turned.then_some(notches), dragged, ppp);
+            return;
+        }
+        if !turned && dragged.x == 0.0 {
             self.settle_view();
             return;
         }
@@ -1993,7 +2065,6 @@ impl Running {
         self.view.offset = self.parked_rows();
 
         if turned {
-            // A notch of the wheel is about 50 points.
             let along = match pointer {
                 Some((x, _)) => {
                     let t = (f64::from(x - rect.x) / f64::from(rect.w)).clamp(0.0, 1.0);
@@ -2001,12 +2072,11 @@ impl Running {
                 }
                 None => 0.0,
             };
-            let notches = f64::from(area.scrolled) / 50.0;
             self.view.zoom_about(notches, along, strip, ZOOM_RANGE);
         }
-        if dragged != 0.0 {
+        if dragged.x != 0.0 {
             self.view
-                .pan(f64::from(dragged) * f64::from(ppp), newest_left, strip);
+                .pan(f64::from(dragged.x) * f64::from(ppp), newest_left, strip);
         }
 
         let written = self.history.written();
@@ -2019,6 +2089,28 @@ impl Running {
             .parked()
             .then(|| written.saturating_sub(self.view.offset.round() as u64));
         self.settle_view();
+    }
+
+    /// The wheel moves the waterfall's eye in and out and a drag orbits it, which is
+    /// what the same two gestures mean once the view is a landscape rather than a wall.
+    ///
+    /// Where the image is looking along the history is left exactly as it was, so
+    /// turning the waterfall off puts the flat view back where it stood.
+    fn move_the_camera(&mut self, notches: Option<f64>, dragged: egui::Vec2, ppp: f32) {
+        if let Some(view) = self.shell.session.camera.take() {
+            self.camera = Camera::of(view);
+        }
+        if let Some(notches) = notches {
+            self.camera.zoom(notches);
+        }
+        if dragged != egui::Vec2::ZERO {
+            let across = f64::from(self.layout.bounds.w.max(1));
+            self.camera.orbit(
+                f64::from(dragged.x) * f64::from(ppp),
+                f64::from(dragged.y) * f64::from(ppp),
+                across,
+            );
+        }
     }
 
     /// Works out the row the image's newest edge sits on, and tells the session what it

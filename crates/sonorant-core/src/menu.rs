@@ -19,8 +19,8 @@ use crate::dsp::{
 use crate::media::{Controls, Follow, Player, Transport};
 use crate::palette::PaletteKind;
 use crate::settings::{
-    AxisLabelMode, CurveStyle, Flag, FrameCap, GraphBackground, Number, Preset, ScaleLanePosition,
-    Settings,
+    AxisLabelMode, CameraView, CurveStyle, Flag, FrameCap, GraphBackground, Number, Preset,
+    ScaleLanePosition, Settings,
 };
 
 /// What capture listens to.
@@ -241,6 +241,8 @@ pub enum Action {
     /// Put the image back on now, at the plain zoom, after the wheel or a drag has
     /// taken it back through the history.
     GoLive,
+    /// Put the waterfall's camera somewhere to start from.
+    SetCamera(CameraView),
     /// Hold the average spectrum as an amber reference, or drop the one held.
     Reference,
     Fullscreen,
@@ -276,6 +278,9 @@ pub struct Session {
     /// Set when the image should go back to now. The app takes it each frame, the way
     /// it takes `command`, and puts the view and the zoom back itself.
     pub go_live: bool,
+    /// Where the waterfall's camera has been asked to go, taken by the app each frame.
+    /// A place to start from rather than a state, so nothing here remembers it.
+    pub camera: Option<CameraView>,
     pub fullscreen: bool,
     /// Whether an amber reference spectrum is being held.
     pub reference: bool,
@@ -958,6 +963,34 @@ fn spectrogram(s: &Settings) -> Vec<Item> {
             |v| format!("{v:.0} px a row"),
             s,
         ),
+        Item::separator(),
+        flag(
+            "Waterfall",
+            "Draw the history as a landscape, with a camera you can orbit",
+            Flag::Waterfall,
+            s,
+        )
+        .key("3"),
+        Item::submenu(
+            "Camera",
+            "Where to put the waterfall's camera",
+            CameraView::ALL
+                .iter()
+                .map(|&v| {
+                    Item::command(
+                        v.name(),
+                        match v {
+                            CameraView::Classic => "Down the history from a little above it",
+                            CameraView::Overhead => "Nearly overhead, close to the flat view",
+                            CameraView::Side => "From one side, where the ridges show their shape",
+                            CameraView::Low => "Along the surface, with the loud rows standing up",
+                        },
+                        Action::SetCamera(v),
+                    )
+                })
+                .collect(),
+        ),
+        Item::separator(),
         sizes(
             "History length",
             "How far back the wheel and a drag can reach, as far as memory allows",
@@ -1418,6 +1451,10 @@ pub fn apply(action: &Action, s: &mut Settings, session: &mut Session) -> Option
             session.go_live = true;
             touched = false;
         }
+        Action::SetCamera(view) => {
+            session.camera = Some(*view);
+            touched = false;
+        }
         Action::Reference => {
             session.reference = !session.reference;
             touched = false;
@@ -1657,6 +1694,7 @@ mod tests {
         for (key, want) in [
             ("Space", Action::Freeze),
             ("End", Action::GoLive),
+            ("3", Action::Toggle(Flag::Waterfall)),
             ("A", Action::Reference),
             ("F11", Action::Fullscreen),
             ("I", Action::Toggle(Flag::Immersive)),

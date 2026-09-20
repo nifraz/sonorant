@@ -59,6 +59,24 @@ named_enum! {
 }
 
 named_enum! {
+    /// Where the waterfall's camera is put when one of its presets is chosen.
+    ///
+    /// A place to start or come back to, not a mode: dragging moves the camera away
+    /// from it, and nothing in the menu claims otherwise, which is why these are
+    /// commands rather than a radio.
+    CameraView {
+        /// Down the history from a little above it, which is the view this is for.
+        Classic = "Classic",
+        /// Nearly overhead, where the waterfall reads almost as the flat view does.
+        Overhead = "Overhead",
+        /// From one side, where the ridges show their shape.
+        Side = "Side",
+        /// Along the surface, where the loud rows stand against the sky.
+        Low = "Low",
+    } default Classic
+}
+
+named_enum! {
     /// The pattern behind the curve.
     GraphBackground { Plain = "Plain", Lines = "Lines", Grid = "Grid", Chessboard = "Chessboard" } default Lines
 }
@@ -312,6 +330,8 @@ pub struct Settings {
     // Centre deck.
     pub show_center_deck: bool,
     pub deck_height_px: i32,
+    /// Draw the history as a landscape instead of as two flat panes.
+    pub waterfall: bool,
     pub deck_show_goniometer: bool,
     /// Draw the goniometer as a phosphor screen: the light fades with real time rather
     /// than with the frame, so a sweep leaves a tail and a held note burns in.
@@ -429,6 +449,7 @@ impl Default for Settings {
             show_scale_units: true,
             show_center_deck: true,
             deck_height_px: 120,
+            waterfall: false,
             deck_show_goniometer: true,
             deck_phosphor: true,
             curve_phosphor: false,
@@ -647,6 +668,7 @@ named_enum! {
         ReserveScaleSpace = "ReserveScaleSpace",
         ShowScaleUnits = "ShowScaleUnits",
         ShowCentreDeck = "ShowCentreDeck",
+        Waterfall = "Waterfall",
         DeckGoniometer = "DeckGoniometer",
         DeckPhosphor = "DeckPhosphor",
         CurvePhosphor = "CurvePhosphor",
@@ -788,6 +810,7 @@ impl Settings {
             Flag::ReserveScaleSpace => self.reserve_scale_space,
             Flag::ShowScaleUnits => self.show_scale_units,
             Flag::ShowCentreDeck => self.show_center_deck,
+            Flag::Waterfall => self.waterfall,
             Flag::DeckGoniometer => self.deck_show_goniometer,
             Flag::DeckPhosphor => self.deck_phosphor,
             Flag::CurvePhosphor => self.curve_phosphor,
@@ -858,6 +881,7 @@ impl Settings {
             Flag::ReserveScaleSpace => &mut self.reserve_scale_space,
             Flag::ShowScaleUnits => &mut self.show_scale_units,
             Flag::ShowCentreDeck => &mut self.show_center_deck,
+            Flag::Waterfall => &mut self.waterfall,
             Flag::DeckGoniometer => &mut self.deck_show_goniometer,
             Flag::DeckPhosphor => &mut self.deck_phosphor,
             Flag::CurvePhosphor => &mut self.curve_phosphor,

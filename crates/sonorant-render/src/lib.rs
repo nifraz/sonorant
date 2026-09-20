@@ -17,6 +17,7 @@ pub mod quickbar;
 pub mod readback;
 pub mod spectrogram;
 pub mod timing;
+pub mod waterfall;
 
 pub use artwork::{Artwork, ArtworkPass, Picture};
 pub use backdrop::{BackdropPass, BeatPhase, FieldView};
@@ -34,3 +35,4 @@ pub use quickbar::QuickBar;
 pub use readback::Readback;
 pub use spectrogram::{PaneView, SpectrogramPass};
 pub use timing::GpuTimer;
+pub use waterfall::{Camera, Landscape, WaterfallPass};

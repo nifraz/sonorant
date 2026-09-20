@@ -99,9 +99,9 @@ impl Shell {
                     .then(|| ui.ctx().pointer_latest_pos())
                     .flatten();
                 area.double_clicked = response.double_clicked();
-                // A drag over the image pans the history, so only the distance along
-                // the time axis is of any use here.
-                area.dragged = response.dragged().then(|| response.drag_delta().x);
+                // A drag over the image pans the history, or orbits the waterfall's
+                // camera, so both directions are wanted.
+                area.dragged = response.dragged().then(|| response.drag_delta());
                 // Smoothed rather than raw: the wheel drives a zoom, and a zoom that
                 // jumps a notch at a time is harder to aim than one that glides.
                 if response.hovered() {
@@ -262,9 +262,9 @@ pub struct Area {
     pub double_clicked: bool,
     /// Whether it was clicked at all, for the quick bar's buttons.
     pub clicked: bool,
-    /// How far a drag moved along the time axis this frame, in points, or `None` when
-    /// nothing is being dragged.
-    pub dragged: Option<f32>,
+    /// How far a drag moved this frame, in points, or `None` when nothing is being
+    /// dragged. The flat views use the time axis; the waterfall uses both.
+    pub dragged: Option<egui::Vec2>,
     /// How far the wheel turned over the image this frame, in points.
     pub scrolled: f32,
     /// Whether the right-click menu is open, so the chrome doesn't fade under it.

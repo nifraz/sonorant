@@ -15,7 +15,7 @@ use half::f16;
 use sonorant_core::dsp::{FreqScale, FrequencyMap, LoudnessReadings};
 use sonorant_core::engine::{GRID_BINS, GRID_FMAX, GRID_FMIN};
 use sonorant_core::palette::{self, PaletteKind};
-use sonorant_core::settings::Settings;
+use sonorant_core::settings::{CameraView, Settings};
 use sonorant_render::artwork::{ArtworkPass, Picture};
 use sonorant_render::backdrop::{BackdropPass, FieldView};
 use sonorant_render::band::BandLayout;
@@ -29,6 +29,7 @@ use sonorant_render::overlay::{Face, Layer, Overlay};
 use sonorant_render::phosphor::{Deposit, Phosphor, PhosphorLook, Sweep};
 use sonorant_render::readback::{Readback, write_png};
 use sonorant_render::spectrogram::{PaneView, SpectrogramPass};
+use sonorant_render::waterfall::{self, Camera, Landscape, WaterfallPass};
 use sonorant_render::{axes, deck};
 
 const WIDTH: u32 = 960;
@@ -1116,6 +1117,175 @@ fn the_backdrop_lights_the_ground_and_rides_the_beat() {
     assert_eq!(
         deaf, quiet,
         "the field answered a beat it was told to ignore"
+    );
+}
+
+/// The landscape stands where the history says it should, and turns with the camera.
+///
+/// One loud band in a quiet history is a ridge; from the front it should stand near the
+/// middle of the picture and above the flat ground, and swinging the camera round should
+/// move it without the picture going empty. What this is really checking is that the
+/// mesh reads the same history the flat view does, that the displacement goes upwards,
+/// and that the camera reaches the shader at all.
+#[test]
+fn the_landscape_stands_where_the_history_says() {
+    const WIDE: u32 = 192;
+    const TALL: u32 = 144;
+    const PUSHED: usize = 240;
+    let Some((device, queue, _, _)) = open_gpu() else {
+        eprintln!("no GPU here; skipping the landscape");
+        return;
+    };
+    let mut history = HistoryStore::new(&device, GRID_BINS as u32, 256);
+    // Quiet everywhere but a band a third of the way up the axis, in every row, so the
+    // surface is a ridge running away from the viewer.
+    let quiet = vec![f16::from_f32(-96.0); GRID_BINS];
+    let mut ridged = quiet.clone();
+    let middle = GRID_BINS / 3;
+    for level in &mut ridged[middle - 24..middle + 24] {
+        *level = f16::from_f32(-8.0);
+    }
+    for i in 0..PUSHED {
+        history.push(
+            &queue,
+            &RowIn {
+                index: i as u64,
+                frames: i as u64 * 800,
+                floor_db: -96.0,
+                ceiling_db: -6.0,
+                a: &ridged,
+                b: &quiet,
+            },
+        );
+    }
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("landscape"),
+        size: wgpu::Extent3d {
+            width: WIDE,
+            height: TALL,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let attachment = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut waterfall = WaterfallPass::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+    waterfall.bind(&device, &history);
+    waterfall.set_palette(&queue, &palette::build_lut(PaletteKind::Magma));
+
+    // The brightest pixel, where it is, and how much of the picture is lit at all.
+    let mut render = |camera: Camera, channel: u32| {
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("landscape"),
+        });
+        // The landscape loads what is there rather than clearing it, because in the app
+        // the backdrop under it is its sky. Here there is no sky, so the last render
+        // would still be showing through this one.
+        encoder
+            .begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("sky"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &attachment,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            })
+            .forget_lifetime();
+        waterfall.draw(
+            &device,
+            &queue,
+            &mut encoder,
+            waterfall::Target {
+                view: &attachment,
+                timestamps: None,
+            },
+            &history,
+            &Landscape {
+                camera,
+                rect: Rect::new(0, 0, WIDE as i32, TALL as i32),
+                framebuffer: (WIDE, TALL),
+                held: None,
+                sheen: true,
+                channel,
+                span_rows: 200.0,
+                frac: 0.0,
+                scale: FreqScale::Note,
+                fmin: 20.0,
+                fmax: 20000.0,
+                global_range: None,
+                background: Rgba::argb(255, 0, 0, 0),
+            },
+        );
+        let shot = Readback::record(&device, &mut encoder, &target);
+        queue.submit([encoder.finish()]);
+        let (w, _h, pixels) = shot.pixels(&device).expect("the frame reads back");
+        let mut best = (0u32, 0usize, 0usize);
+        let mut lit = 0usize;
+        for y in 0..TALL as usize {
+            for x in 0..WIDE as usize {
+                let i = (y * w as usize + x) * 4;
+                let v = u32::from(pixels[i]) + u32::from(pixels[i + 1]) + u32::from(pixels[i + 2]);
+                if v > best.0 {
+                    best = (v, x, y);
+                }
+                // Anything at all: the sheen over flat ground is a handful of levels
+                // in a linear eight-bit target, where in the app the composite encodes
+                // it into something you can see.
+                if v > 3 {
+                    lit += 1;
+                }
+            }
+        }
+        (best, lit)
+    };
+
+    // Nothing is drawn before the pass is told where to look, so the cleared target has
+    // to be the thing that changed.
+    let ((bright, x, y), lit) = render(Camera::of(CameraView::Classic), 0);
+    assert!(bright > 150, "the ridge barely showed: {bright}");
+    // The ground is lit too, so a good part of the picture is the surface rather than
+    // the sky behind it.
+    let all = (WIDE * TALL) as usize;
+    assert!(
+        lit > all / 4 && lit < all,
+        "{lit} of {all} pixels are surface"
+    );
+    // The band is a third of the way up a note axis, so left of centre and above the
+    // bottom of the ground, which is what says the displacement went upwards.
+    assert!(
+        x < WIDE as usize / 2,
+        "the ridge should be left of centre, not at {x}"
+    );
+    assert!(
+        (TALL as usize / 8..TALL as usize * 3 / 4).contains(&y),
+        "the ridge should stand above the ground, not at {y}"
+    );
+
+    // The other channel is quiet everywhere, so it is ground and no ridge.
+    let ((quiet_peak, _, _), _) = render(Camera::of(CameraView::Classic), 1);
+    assert!(
+        quiet_peak * 3 < bright,
+        "a silent channel drew a ridge: {quiet_peak} against {bright}"
+    );
+
+    // Swung round to the side, the ridge moves but the landscape is still there.
+    let ((side, side_x, _), side_lit) = render(Camera::of(CameraView::Side), 0);
+    assert!(side > 150 && side_lit > all / 10, "{side} {side_lit}");
+    assert!(
+        side_x.abs_diff(x) > WIDE as usize / 20,
+        "turning the camera moved nothing: {x} to {side_x}"
     );
 }
 
