@@ -11,10 +11,10 @@ use sonorant_core::runtime::PaneCurves;
 use sonorant_core::settings::{FrameCap, Settings};
 use sonorant_core::store::{self, Store};
 use sonorant_render::{
-    ArtworkPass, BandLayout, CurveData, CurveLook, CurvePass, CurveView, DeckState, GpuTimer,
-    HistoryStore, Layer, Overlay, PaneView, Phosphor, PhosphorLook, QuickBar, Readback, Reading,
-    Readout, Rect, Rgba, RowIn, ScopeLayout, SpectrogramPass, Sweep, Visuals, WaveRing, axes,
-    bloom, deck, hover, phosphor, quickbar,
+    ArtworkPass, BandLayout, CurveData, CurveLook, CurvePass, CurveView, DeckState, Deposit,
+    GpuTimer, HistoryStore, Layer, Overlay, PaneView, Phosphor, PhosphorLook, QuickBar, Readback,
+    Reading, Readout, Rect, Rgba, RowIn, ScopeLayout, SpectrogramPass, Sweep, Visuals, WaveRing,
+    axes, bloom, curves, deck, hover, phosphor, quickbar,
 };
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
@@ -94,7 +94,10 @@ struct Running {
     curves: CurvePass,
     /// The goniometer's phosphor screen, when the setting has it drawing the figure.
     phosphor: Phosphor,
-    /// This frame's trace, in the goniometer's own pixels. Kept to be refilled rather
+    /// A phosphor screen per curve strip, when the setting has them drawing the line.
+    /// One each, because a screen is one accumulator over one rectangle.
+    curve_phosphor: [Phosphor; 2],
+    /// This frame's trace, in whichever screen's own pixels. Kept to be refilled rather
     /// than reallocated each frame.
     trace: Vec<[f32; 2]>,
     overlay: Overlay,
@@ -260,6 +263,10 @@ impl App {
         spectrogram.set_palette(&gpu.queue, &lut);
         let curves = CurvePass::new(&gpu.device, gpu.config.format);
         let phosphor = Phosphor::new(&gpu.device, gpu.config.format);
+        let curve_phosphor = [
+            Phosphor::new(&gpu.device, gpu.config.format),
+            Phosphor::new(&gpu.device, gpu.config.format),
+        ];
         curves.set_palette(&gpu.queue, &lut);
         let overlay = Overlay::new(&gpu.device, &gpu.queue, gpu.config.format);
         let artwork = ArtworkPass::new(&gpu.device, gpu.config.format, bloom::TARGET_FORMAT);
@@ -351,6 +358,7 @@ impl App {
             hue_shift: 0.0,
             scope: (Vec::new(), Vec::new()),
             phosphor,
+            curve_phosphor,
             trace: Vec::new(),
             loudness: sonorant_core::dsp::LoudnessReadings::default(),
             reference: None,
@@ -1079,13 +1087,13 @@ impl Running {
         }
         // The phosphor fades and gathers before the furniture pass, because it writes
         // its own render targets and the furniture pass is already open by then.
+        let dt = since_last.map_or(0.0, |d| d.as_secs_f64().min(PHOSPHOR_GAP));
         let scope = self.phosphor_look();
         match &scope {
             Some(look) => {
                 let square = self.band.deck.goniometer;
                 // The samples that really passed since the last frame, so the figure is
                 // continuous and its brightness does not follow the frame rate.
-                let dt = since_last.map_or(0.0, |d| d.as_secs_f64().min(PHOSPHOR_GAP));
                 let want =
                     phosphor::samples_for(dt, rate, self.scope.0.len().min(self.scope.1.len()));
                 deck::goniometer_trace(square, &self.scope.0, &self.scope.1, want, &mut self.trace);
@@ -1098,12 +1106,46 @@ impl Running {
                         dt,
                         look,
                         points: &self.trace,
+                        deposit: Deposit::AlongThePath,
                     },
                 );
             }
             // Switched off, or the deck is gone: drop what it was holding so turning it
             // back on doesn't bring a stale figure with it.
             None => self.phosphor.clear(),
+        }
+        // The curve strips' screens, one each. Unlike the scope's trace, a curve arrives
+        // once a frame however long the frame was, so the light carries the length.
+        let curve_scope = self.curve_phosphor_look(&drawn);
+        for (i, screen) in self.curve_phosphor.iter_mut().enumerate() {
+            let strip = self.layout.panes.get(i).map(|p| p.curve);
+            let values = self.latest.get(i).map(|c| c.display.as_slice());
+            match (&curve_scope, strip, values) {
+                (Some(look), Some(rect), Some(display))
+                    if rect.w > 0 && display.len() == rect.h as usize =>
+                {
+                    let view = CurveView {
+                        rect,
+                        curve_on_left: self.layout.panes[i].curve_on_left,
+                        floor_db: self.range.0,
+                        ceiling_db: self.range.1,
+                    };
+                    curves::phosphor_trace(&view, display, &mut self.trace);
+                    screen.accumulate(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &mut encoder,
+                        &Sweep {
+                            rect,
+                            dt,
+                            look,
+                            points: &self.trace,
+                            deposit: Deposit::OncePerFrame,
+                        },
+                    );
+                }
+                _ => screen.clear(),
+            }
         }
         {
             // The furniture over the visuals, blended as GDI+ did (see colour.rs).
@@ -1127,6 +1169,12 @@ impl Running {
                 .forget_lifetime();
             self.overlay.draw(Layer::Under, &mut pass);
             self.curves.draw(&mut pass);
+            if curve_scope.is_some() {
+                let size = (self.gpu.config.width, self.gpu.config.height);
+                for screen in &self.curve_phosphor {
+                    screen.draw(&self.gpu.queue, &mut pass, size, alpha);
+                }
+            }
             self.overlay.draw(Layer::Over, &mut pass);
             // Over the goniometer's frame and its guides, which `Layer::Over` just drew.
             if scope.is_some() {
@@ -1274,13 +1322,36 @@ impl Running {
             return None;
         }
         Some(PhosphorLook {
-            persistence: f64::from(s.phosphor_ms) / 1000.0,
-            intensity: f64::from(s.phosphor_intensity) / 100.0,
             // The palette's colour, as the overlay's trace used, so the scope still
             // belongs to the theme rather than being a fixed CRT green.
             colour: Rgba::rgb(palette::color_at(&self.lut, 0.80), 255),
-            ..PhosphorLook::default()
+            ..self.phosphor_base()
         })
+    }
+
+    /// How the curve strips' phosphor screens should look, or `None` when the setting
+    /// has the curve pass drawing the line itself.
+    ///
+    /// The persistence and the intensity are the scope's: one screen with one feel,
+    /// rather than two sets of numbers meaning the same thing.
+    fn curve_phosphor_look(&self, drawn: &Settings) -> Option<PhosphorLook> {
+        let look = CurveLook::new(drawn, &self.lut, 1.0);
+        look.phosphor.then(|| PhosphorLook {
+            colour: look.hi,
+            // Tighter than the scope's: a strip is tall and narrow, and a halo as wide
+            // as the scope's would bleed the curve into the image beside it.
+            glow: 0.45,
+            ..self.phosphor_base()
+        })
+    }
+
+    /// The persistence and intensity both phosphor screens share.
+    fn phosphor_base(&self) -> PhosphorLook {
+        PhosphorLook {
+            persistence: f64::from(self.settings.phosphor_ms) / 1000.0,
+            intensity: f64::from(self.settings.phosphor_intensity) / 100.0,
+            ..PhosphorLook::default()
+        }
     }
 
     /// How far the backdrop comes forward, from 0 to 1. Nostalgia+ capped the setting

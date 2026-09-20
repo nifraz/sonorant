@@ -20,12 +20,12 @@ use sonorant_render::artwork::{ArtworkPass, Picture};
 use sonorant_render::band::BandLayout;
 use sonorant_render::bloom::{self, Visuals};
 use sonorant_render::colour::Rgba;
-use sonorant_render::curves::{CurveData, CurveLook, CurvePass, CurveView};
+use sonorant_render::curves::{self, CurveData, CurveLook, CurvePass, CurveView};
 use sonorant_render::deck::{DeckState, TrackInfo, WaveRing};
 use sonorant_render::history::{HistoryStore, RowIn};
 use sonorant_render::layout::{Rect, ScopeLayout};
 use sonorant_render::overlay::{Face, Layer, Overlay};
-use sonorant_render::phosphor::{Phosphor, PhosphorLook, Sweep};
+use sonorant_render::phosphor::{Deposit, Phosphor, PhosphorLook, Sweep};
 use sonorant_render::readback::{Readback, write_png};
 use sonorant_render::spectrogram::{PaneView, SpectrogramPass};
 use sonorant_render::{axes, deck};
@@ -264,8 +264,14 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue) -> (u32, u32, Vec<u8>) {
         last_over_seconds: 75.0,
     };
     let scope: Vec<f32> = (0..2048).map(|i| (i as f32 * 0.05).sin() * 0.6).collect();
+    // The right channel's phase walks across the buffer, so the two halves the phosphor
+    // is swept with trace different figures. Without that they are the same ellipse and
+    // the golden cannot tell a fade from a redraw.
     let scope_r: Vec<f32> = (0..2048)
-        .map(|i| (i as f32 * 0.05 + 0.4).sin() * 0.45)
+        .map(|i| {
+            let along = i as f32 / 2048.0;
+            (i as f32 * 0.05 + 0.4 + along * 1.6).sin() * 0.45
+        })
         .collect();
     let track = TrackInfo {
         title: "Golden Render".into(),
@@ -323,12 +329,10 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue) -> (u32, u32, Vec<u8>) {
         BACKDROP_STRENGTH,
     );
 
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("golden"),
-    });
     // The phosphor screen, swept twice at a sixtieth of a second: the first sweep starts
     // it from black and the second fades that and writes over it, so the golden covers
-    // the fade as well as the trace, the glow and the composite.
+    // the fade as well as the trace, the glow and the composite. A submit each, because
+    // the points only reach the GPU at one (see `Phosphor::accumulate`).
     let mut phosphor = Phosphor::new(device, wgpu::TextureFormat::Rgba8Unorm);
     let look = PhosphorLook {
         colour: Rgba::rgb(palette::color_at(&lut, 0.80), 255),
@@ -345,18 +349,27 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue) -> (u32, u32, Vec<u8>) {
             scope.len() / 2,
             &mut trace,
         );
+        let mut sweep = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("golden phosphor"),
+        });
         phosphor.accumulate(
             device,
             queue,
-            &mut encoder,
+            &mut sweep,
             &Sweep {
                 rect: band.deck.goniometer,
                 dt: 1.0 / 60.0,
                 look: &look,
                 points: &trace,
+                deposit: Deposit::AlongThePath,
             },
         );
+        queue.submit([sweep.finish()]);
     }
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("golden"),
+    });
     {
         let bg = palette::background(&lut);
         let linear = |c: u8| {
@@ -613,22 +626,28 @@ fn the_phosphor_fades_on_a_clock() {
     let dt = 1.0 / 60.0;
 
     let mut sweep_and_read = |points: &[[f32; 2]], sweeps: usize| {
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("phosphor"),
-        });
+        // One submit a sweep, as a frame does: the points only reach the GPU at one.
         for _ in 0..sweeps {
+            let mut one = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("phosphor"),
+            });
             phosphor.accumulate(
                 &device,
                 &queue,
-                &mut encoder,
+                &mut one,
                 &Sweep {
                     rect,
                     dt,
                     look: &look,
                     points,
+                    deposit: Deposit::AlongThePath,
                 },
             );
+            queue.submit([one.finish()]);
         }
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("phosphor"),
+        });
         {
             let mut pass = encoder
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -681,6 +700,127 @@ fn the_phosphor_fades_on_a_clock() {
         (0.005..0.02).contains(&ratio),
         "a hundredth should be left after one persistence, not {ratio} ({left} of {settled})"
     );
+}
+
+/// A curve that moves leaves a trail behind it, dimmest where it has been longest.
+///
+/// This is the whole point of the phosphor on the strips, and it is the one thing a
+/// still picture cannot show. The curve is walked across the strip a pixel or so a
+/// frame; afterwards the light at each place it stood should fall away with how long
+/// ago it stood there, and nowhere it never reached should be lit at all.
+#[test]
+fn a_moving_curve_leaves_a_trail() {
+    const SIDE: u32 = 64;
+    const FRAMES: usize = 10;
+    let Some((device, queue, _, _)) = open_gpu() else {
+        eprintln!("no GPU here; skipping the curve trail");
+        return;
+    };
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("trail"),
+        size: wgpu::Extent3d {
+            width: SIDE,
+            height: SIDE,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut phosphor = Phosphor::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+    let rect = Rect::new(0, 0, SIDE as i32, SIDE as i32);
+    let look = PhosphorLook {
+        persistence: 0.5,
+        // No halo, so a reading at one column is that column's own light.
+        glow: 0.0,
+        colour: Rgba::argb(255, 255, 255, 255),
+        ..PhosphorLook::default()
+    };
+    let strip = CurveView {
+        rect,
+        curve_on_left: true,
+        floor_db: -100.0,
+        ceiling_db: -20.0,
+    };
+    // A flat curve, walked from a quarter across to three quarters, four pixels a frame.
+    let at_column = |frame: usize| 16 + frame * 4;
+    let mut trace = Vec::new();
+    for frame in 0..FRAMES {
+        let db = -100.0 + 80.0 * at_column(frame) as f32 / SIDE as f32;
+        let display = vec![db; SIDE as usize];
+        curves::phosphor_trace(&strip, &display, &mut trace);
+        // A submit a frame: the points only reach the GPU at one, so recording all ten
+        // into one command buffer would draw the tenth curve ten times over.
+        let mut one = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("trail"),
+        });
+        phosphor.accumulate(
+            &device,
+            &queue,
+            &mut one,
+            &Sweep {
+                rect,
+                dt: 1.0 / 60.0,
+                look: &look,
+                points: &trace,
+                deposit: Deposit::OncePerFrame,
+            },
+        );
+        queue.submit([one.finish()]);
+    }
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("trail"),
+    });
+    {
+        let mut pass = encoder
+            .begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("trail"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            })
+            .forget_lifetime();
+        phosphor.draw(&queue, &mut pass, (SIDE, SIDE), 1.0);
+    }
+    let shot = Readback::record(&device, &mut encoder, &target);
+    queue.submit([encoder.finish()]);
+    let (w, _h, pixels) = shot.pixels(&device).expect("the frame reads back");
+    let column = |x: usize| pixels[(32 * w as usize + x) * 4];
+
+    // Newest first: every place the curve stood, in the order it left them.
+    let trail: Vec<u8> = (0..FRAMES).rev().map(|f| column(at_column(f))).collect();
+    eprintln!("the trail, newest first: {trail:?}");
+    assert!(
+        trail[0] > 40,
+        "the curve itself barely registered: {trail:?}"
+    );
+    for (newer, older) in trail.iter().zip(&trail[1..]) {
+        assert!(
+            newer > older,
+            "the trail should fade away behind the curve, not {trail:?}"
+        );
+    }
+    assert!(
+        *trail.last().unwrap() > 0,
+        "half a persistence of trail should still be visible: {trail:?}"
+    );
+    // Ahead of the curve and behind the trail, nothing.
+    assert_eq!(column(at_column(FRAMES - 1) + 8), 0, "ahead of the curve");
+    assert_eq!(column(at_column(0) - 8), 0, "behind the trail");
 }
 
 #[test]

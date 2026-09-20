@@ -864,6 +864,12 @@ fn graph(s: &Settings) -> Vec<Item> {
             Flag::SolidFill,
             s,
         ),
+        flag(
+            "Phosphor curve",
+            "Let the line smear where it moves, sharing the scope's persistence",
+            Flag::CurvePhosphor,
+            s,
+        ),
         Item::separator(),
         flag(
             "Curve beside the gutter",

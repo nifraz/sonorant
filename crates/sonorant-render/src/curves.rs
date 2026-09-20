@@ -60,6 +60,9 @@ pub struct CurveLook {
     /// The level scale's lines and the chessboard's squares, already faded.
     pub grid: Rgba,
     pub chess: Rgba,
+    /// Whether the phosphor screen is drawing the display curve. The fill, the
+    /// background and the other traces are drawn either way; only the line moves.
+    pub phosphor: bool,
 }
 
 impl CurveLook {
@@ -90,6 +93,9 @@ impl CurveLook {
             reference: pick_keep_alpha(t.snapshot, Rgba::argb(215, 255, 205, 90)),
             grid: grid.faded(alpha),
             chess: Rgba::argb(26, 255, 255, 255).faded(alpha),
+            // Only the line style has a line for a phosphor to draw; bars and LED are
+            // blocks, and smearing those would just be a dimmer block.
+            phosphor: s.curve_phosphor && s.style == CurveStyle::Line,
         }
     }
 }
@@ -104,6 +110,30 @@ pub fn db_step(span_db: f64, pixels: i32) -> f64 {
         .into_iter()
         .find(|&step| pixels as f64 * step / span_db >= 55.0)
         .unwrap_or(40.0)
+}
+
+/// The display curve as a polyline in the strip's own pixels, the origin at its top
+/// left, for the phosphor screen.
+///
+/// The same map `curves.wgsl` uses: frequency runs up the strip with the lowest value at
+/// the bottom, and level grows from the strip's outer edge towards the image.
+pub fn phosphor_trace(view: &CurveView, display: &[f32], into: &mut Vec<[f32; 2]>) {
+    into.clear();
+    let n = display.len();
+    if n < 2 || view.rect.w <= 0 || view.rect.h <= 0 {
+        return;
+    }
+    let span = (view.ceiling_db - view.floor_db).max(1.0);
+    let w = view.rect.w as f64;
+    let (base, dir) = if view.curve_on_left {
+        (0.0, 1.0)
+    } else {
+        (w, -1.0)
+    };
+    into.extend(display.iter().enumerate().map(|(k, &db)| {
+        let t = ((f64::from(db) - view.floor_db) / span).clamp(0.0, 1.0);
+        [(base + dir * t * w + 0.5) as f32, (n - 1 - k) as f32 + 0.5]
+    }));
 }
 
 #[repr(C)]
@@ -368,7 +398,8 @@ impl CurvePass {
                 | (look.show_peak as u32) << 1
                 | (look.show_average as u32) << 2
                 | (look.show_minimum as u32) << 3
-                | (data.reference.is_some() as u32) << 4;
+                | (data.reference.is_some() as u32) << 4
+                | (look.phosphor as u32) << 5;
             let u = CurveUniform {
                 rect: r.to_f32(),
                 base_x: base_x as f32,
@@ -481,6 +512,60 @@ fn bind(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The phosphor's polyline has to land on the line the shader would have drawn,
+    /// because it replaces it: `curves.wgsl` puts the lowest value at the bottom and
+    /// grows level from the strip's outer edge, and so must this.
+    #[test]
+    fn the_phosphor_trace_runs_where_the_shader_draws_the_line() {
+        let view = |curve_on_left| CurveView {
+            rect: Rect::new(100, 40, 60, 4),
+            curve_on_left,
+            floor_db: -100.0,
+            ceiling_db: -20.0,
+        };
+        // Floor, a quarter up, three quarters up, ceiling; lowest frequency first.
+        let display = [-100.0, -80.0, -40.0, -20.0];
+        let mut trace = Vec::new();
+
+        phosphor_trace(&view(true), &display, &mut trace);
+        // Frequency runs up the strip, so the first value is the bottom row.
+        let ys: Vec<f32> = trace.iter().map(|p| p[1]).collect();
+        assert_eq!(ys, [3.5, 2.5, 1.5, 0.5]);
+        // Level grows rightwards from the strip's left edge.
+        let xs: Vec<f32> = trace.iter().map(|p| p[0]).collect();
+        assert_eq!(xs, [0.5, 15.5, 45.5, 60.5]);
+
+        // On the right, level grows leftwards from the right edge: mirrored, same rows.
+        phosphor_trace(&view(false), &display, &mut trace);
+        let xs: Vec<f32> = trace.iter().map(|p| p[0]).collect();
+        assert_eq!(xs, [60.5, 45.5, 15.5, 0.5]);
+        assert_eq!(
+            trace.iter().map(|p| p[1]).collect::<Vec<_>>(),
+            [3.5, 2.5, 1.5, 0.5]
+        );
+    }
+
+    /// A strip with no room, or a curve with nothing to join up, draws nothing rather
+    /// than a point at the origin.
+    #[test]
+    fn a_curve_with_nothing_in_it_traces_nothing() {
+        let mut trace = vec![[9.0, 9.0]];
+        let empty = CurveView {
+            rect: Rect::new(0, 0, 0, 0),
+            curve_on_left: true,
+            floor_db: -100.0,
+            ceiling_db: -20.0,
+        };
+        phosphor_trace(&empty, &[-50.0, -50.0], &mut trace);
+        assert!(trace.is_empty());
+        let real = CurveView {
+            rect: Rect::new(0, 0, 10, 1),
+            ..empty
+        };
+        phosphor_trace(&real, &[-50.0], &mut trace);
+        assert!(trace.is_empty(), "one point is not a line");
+    }
 
     #[test]
     fn uniform_matches_the_shader_layout() {

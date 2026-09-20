@@ -27,7 +27,8 @@ struct Curve {
     led_segment: u32,
     floor_db: f32,
     span_db: f32,
-    // Bit 0 fill, 1 peak trace, 2 average, 3 minimum, 4 reference.
+    // Bit 0 fill, 1 peak trace, 2 average, 3 minimum, 4 reference, 5 the phosphor
+    // screen is drawing the display curve, so this pass leaves the line to it.
     flags: u32,
     // 0 plain, 1 lines, 2 grid, 3 chessboard.
     background: u32,
@@ -240,8 +241,10 @@ fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
             let fill = mix(c.fill_left, c.fill_right, g);
             col = over(col, with_coverage(fill, min(inside, beyond_base)));
         }
-        let d = polyline_distance(DISPLAY, p, row);
-        col = over(col, with_coverage(c.line, c.line_width * 0.5 + 0.5 - d));
+        if ((c.flags & 32u) == 0u) {
+            let d = polyline_distance(DISPLAY, p, row);
+            col = over(col, with_coverage(c.line, c.line_width * 0.5 + 0.5 - d));
+        }
     } else {
         col = over(col, bars(p));
     }

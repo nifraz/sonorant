@@ -27,7 +27,7 @@ pub use history::{HistoryStore, RowIn, RowMeta};
 pub use hover::{Hover, Reading, Readout};
 pub use layout::{PaneLayout, Rect, ScopeLayout};
 pub use overlay::{Face, Layer, Overlay};
-pub use phosphor::{Phosphor, PhosphorLook, Sweep};
+pub use phosphor::{Deposit, Phosphor, PhosphorLook, Sweep};
 pub use quickbar::QuickBar;
 pub use readback::Readback;
 pub use spectrogram::{PaneView, SpectrogramPass};

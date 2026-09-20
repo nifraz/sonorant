@@ -25,10 +25,14 @@ const ACCUMULATOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float
 /// bloom uses: the scope is a small square, and a halo blurred at an eighth of eighty
 /// pixels reaches almost across it, which reads as fog rather than as phosphor.
 const GLOW_DIVISOR: u32 = 2;
-/// What a segment lays down at full intensity. Tuned by eye against the old
-/// single-frame trace: at the default persistence a steady tone reads about as bright as
-/// it did, and the tail is what's new.
-const DEPOSIT: f32 = 0.055;
+/// What one crossing of a pixel lays down at full intensity, for a trace that follows a
+/// path. Tuned by eye against the old single-frame goniometer: at the default
+/// persistence a steady tone reads about as bright as it did, and the tail is what's new.
+const DEPOSIT_PER_CROSSING: f32 = 0.055;
+/// What a whole second of drawing lays down at full intensity, for a trace redrawn once
+/// a frame. About a sixtieth of it lands in a frame at sixty, which is the same order as
+/// a crossing, so the two kinds of screen come out at a similar brightness.
+const DEPOSIT_PER_SECOND: f32 = 3.5;
 /// The fraction of the original light a trace has left once its persistence has passed.
 /// A hundredth is about where a tail stops being visible, which is what the setting
 /// should mean to someone reading it.
@@ -85,6 +89,22 @@ impl Default for PhosphorLook {
     }
 }
 
+/// How a sweep's points stand in for time, which decides what one segment lays down.
+///
+/// The two are not interchangeable, and getting it wrong shows up as a picture that
+/// changes brightness with the frame rate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Deposit {
+    /// The points are samples along a path the signal really travelled during the
+    /// frame, so a pixel is crossed as often as the signal crossed it and every
+    /// crossing lays down the same light. The goniometer.
+    AlongThePath,
+    /// The points are one snapshot, drawn once however long the frame was, so the light
+    /// has to carry the frame's length itself. The curve strips, which get one new
+    /// curve a frame whatever the frame rate.
+    OncePerFrame,
+}
+
 /// One frame's trace: where the scope goes, how long the frame was, and the points.
 ///
 /// `points` are in the scope's own pixels, the origin at its top left, and should be
@@ -97,6 +117,7 @@ pub struct Sweep<'a> {
     pub dt: f64,
     pub look: &'a PhosphorLook,
     pub points: &'a [[f32; 2]],
+    pub deposit: Deposit,
 }
 
 /// One phosphor screen: an accumulator over one rectangle, its glow, and the passes that
@@ -399,6 +420,12 @@ impl Phosphor {
     }
 
     /// Fades the screen by the sweep's real time and lays its points over it.
+    ///
+    /// **Once per submit.** The points go up through `Queue::write_buffer`, which does
+    /// not happen where it is called but at the start of the next submit, so two sweeps
+    /// recorded into one command buffer would both draw the second one's points. A
+    /// frame sweeps each screen once and submits, which is the shape this wants; a test
+    /// that wants a history has to submit between sweeps, as a frame does.
     pub fn accumulate(
         &mut self,
         device: &wgpu::Device,
@@ -411,6 +438,7 @@ impl Phosphor {
             dt,
             look,
             points,
+            deposit,
         } = *sweep;
         self.placed = rect;
         self.glow_strength = look.glow;
@@ -461,8 +489,10 @@ impl Phosphor {
             &ScopeUniform {
                 colour,
                 half_width: look.width.max(0.1) * 0.5,
-                deposit: DEPOSIT
-                    * look.intensity.clamp(0.0, 4.0) as f32
+                deposit: match deposit {
+                    Deposit::AlongThePath => DEPOSIT_PER_CROSSING,
+                    Deposit::OncePerFrame => DEPOSIT_PER_SECOND * dt as f32,
+                } * look.intensity.clamp(0.0, 4.0) as f32
                     * deposit_over(dt, look.persistence) as f32,
                 ..base
             },
@@ -723,6 +753,28 @@ pub fn samples_for(dt: f64, rate: f64, available: usize) -> usize {
 mod tests {
     use super::*;
 
+    /// A curve redrawn once a frame settles in the same place at any frame rate too,
+    /// though by the other route: the deposit carries the frame's length rather than
+    /// the crossings doing it.
+    #[test]
+    fn a_once_a_frame_trace_settles_where_a_path_does() {
+        let settle = |fps: f64| {
+            let dt = 1.0 / fps;
+            let decay = decay_over(dt, 0.5);
+            let deposit = f64::from(DEPOSIT_PER_SECOND) * dt * deposit_over(dt, 0.5);
+            let mut light = 0.0;
+            for _ in 0..2000 {
+                light = light * decay + deposit;
+            }
+            light
+        };
+        let (fast, slow) = (settle(120.0), settle(30.0));
+        assert!(
+            (fast - slow).abs() / fast < 1e-9,
+            "{fast} at 120 against {slow} at 30"
+        );
+    }
+
     #[test]
     fn the_fade_does_not_depend_on_how_the_time_is_cut_up() {
         let whole = decay_over(1.0 / 30.0, 0.5);
@@ -762,7 +814,7 @@ mod tests {
             let dt = 1.0 / fps;
             let decay = decay_over(dt, 0.5);
             // Crossings scale with the frame, as `samples_for` makes them.
-            let deposit = f64::from(DEPOSIT) * dt * 400.0 * deposit_over(dt, 0.5);
+            let deposit = f64::from(DEPOSIT_PER_CROSSING) * dt * 400.0 * deposit_over(dt, 0.5);
             let mut light = 0.0;
             for _ in 0..2000 {
                 light = light * decay + deposit;

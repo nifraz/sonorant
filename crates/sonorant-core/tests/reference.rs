@@ -228,6 +228,7 @@ fn every_setting_survives_a_save_and_load() {
         "px_per_row",
         "smooth_time",
         "deck_phosphor",
+        "curve_phosphor",
         "phosphor_ms",
         "phosphor_intensity",
     ];

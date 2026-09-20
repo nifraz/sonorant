@@ -316,6 +316,9 @@ pub struct Settings {
     /// Draw the goniometer as a phosphor screen: the light fades with real time rather
     /// than with the frame, so a sweep leaves a tail and a held note burns in.
     pub deck_phosphor: bool,
+    /// Draw the spectrum curve on a phosphor screen too, so a moving peak smears rather
+    /// than jumping. Only the line style has a line to smear.
+    pub curve_phosphor: bool,
     /// How long the phosphor takes to fade to a hundredth, in milliseconds.
     pub phosphor_ms: i32,
     /// How hard the phosphor trace is written, as a percentage.
@@ -420,6 +423,7 @@ impl Default for Settings {
             deck_height_px: 120,
             deck_show_goniometer: true,
             deck_phosphor: true,
+            curve_phosphor: false,
             phosphor_ms: 500,
             phosphor_intensity: 100,
             deck_show_transport: true,
@@ -636,6 +640,7 @@ named_enum! {
         ShowCentreDeck = "ShowCentreDeck",
         DeckGoniometer = "DeckGoniometer",
         DeckPhosphor = "DeckPhosphor",
+        CurvePhosphor = "CurvePhosphor",
         DeckTransport = "DeckTransport",
         DeckArtwork = "DeckArtwork",
         DeckTrackInfo = "DeckTrackInfo",
@@ -774,6 +779,7 @@ impl Settings {
             Flag::ShowCentreDeck => self.show_center_deck,
             Flag::DeckGoniometer => self.deck_show_goniometer,
             Flag::DeckPhosphor => self.deck_phosphor,
+            Flag::CurvePhosphor => self.curve_phosphor,
             Flag::DeckTransport => self.deck_show_transport,
             Flag::DeckArtwork => self.deck_show_artwork,
             Flag::DeckTrackInfo => self.deck_show_track_info,
@@ -843,6 +849,7 @@ impl Settings {
             Flag::ShowCentreDeck => &mut self.show_center_deck,
             Flag::DeckGoniometer => &mut self.deck_show_goniometer,
             Flag::DeckPhosphor => &mut self.deck_phosphor,
+            Flag::CurvePhosphor => &mut self.curve_phosphor,
             Flag::DeckTransport => &mut self.deck_show_transport,
             Flag::DeckArtwork => &mut self.deck_show_artwork,
             Flag::DeckTrackInfo => &mut self.deck_show_track_info,
