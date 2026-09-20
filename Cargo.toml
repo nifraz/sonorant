@@ -45,6 +45,7 @@ log = "0.4.34"
 env_logger = { version = "0.11.11", default-features = false, features = ["auto-color", "humantime"] }
 pollster = "1.0.1"
 png = "0.18.1"
+zune-jpeg = "0.5.15"
 # 0.5: later versions build a C file (alloca), which the GNU toolchain here cannot.
 criterion = { version = "0.5.1", default-features = false, features = ["cargo_bench_support"] }
 # The same major wgpu uses, so there's one copy.

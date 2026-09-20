@@ -1,5 +1,6 @@
 //! Sonorant's GPU renderer, built on wgpu and WGSL shaders.
 
+pub mod artwork;
 pub mod axes;
 pub mod band;
 pub mod bloom;
@@ -13,6 +14,7 @@ pub mod readback;
 pub mod spectrogram;
 pub mod timing;
 
+pub use artwork::{Artwork, ArtworkPass, Picture};
 pub use band::{BandLayout, DeckLayout};
 pub use bloom::Visuals;
 pub use colour::Rgba;

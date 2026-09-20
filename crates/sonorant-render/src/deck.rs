@@ -14,7 +14,8 @@ use crate::colour::{Rgba, pick, pick_keep_alpha};
 use crate::layout::{PaneLayout, Rect};
 use crate::overlay::{Face, Layer, Overlay};
 
-/// What's playing, as the deck shows it. Phase 4 fills this from the media session.
+/// What's playing, as the deck shows it, built from the media session's
+/// [`NowPlaying`](sonorant_core::media::NowPlaying).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TrackInfo {
     pub title: String,
@@ -27,6 +28,18 @@ pub struct TrackInfo {
 impl TrackInfo {
     pub fn is_empty(&self) -> bool {
         *self == TrackInfo::default()
+    }
+}
+
+impl From<&sonorant_core::media::NowPlaying> for TrackInfo {
+    fn from(n: &sonorant_core::media::NowPlaying) -> TrackInfo {
+        TrackInfo {
+            title: n.title.clone(),
+            artist: n.artists_line(),
+            album: n.album.clone(),
+            composer: n.composer.clone(),
+            year: n.year.clone(),
+        }
     }
 }
 
@@ -44,6 +57,10 @@ pub struct DeckState<'a> {
     /// Position and length in seconds, when a player is reporting them.
     pub position: Option<(f64, f64)>,
     pub playing: bool,
+    /// Whether the app has a picture to draw in the frame. The picture itself is a
+    /// texture, drawn by [`crate::artwork::ArtworkPass`] between this overlay's
+    /// layers; all the deck does is leave room for it and put the frame on top.
+    pub has_art: bool,
 }
 
 /// The waveform lanes' history: one pair of extremes per spectrogram row, so a
@@ -190,7 +207,7 @@ fn deck(
         return;
     }
     if d.art.w > 0 {
-        artwork(o, d.art, alpha);
+        artwork(o, d.art, state.has_art, alpha);
     }
     if d.info.w > 0 {
         track_info(o, d.info, state.track, alpha, px);
@@ -209,18 +226,23 @@ fn deck(
     }
 }
 
-/// A placeholder until Phase 4 brings artwork in: the frame it will sit in.
-fn artwork(o: &mut Overlay, r: Rect, alpha: f64) {
-    o.rect(
-        Layer::Over,
-        r.x as f32,
-        r.y as f32,
-        r.w as f32,
-        r.h as f32,
-        Rgba::argb(120, 20, 20, 26).faded(alpha),
-    );
+/// The cover's frame, and the dark square behind it when there is no cover.
+///
+/// The picture itself is a texture and is drawn between the overlay's layers, so the
+/// frame goes on [`Layer::Top`] to land over it, which is the order GDI+ drew them in.
+fn artwork(o: &mut Overlay, r: Rect, has_art: bool, alpha: f64) {
+    if !has_art {
+        o.rect(
+            Layer::Over,
+            r.x as f32,
+            r.y as f32,
+            r.w as f32,
+            r.h as f32,
+            Rgba::argb(120, 20, 20, 26).faded(alpha),
+        );
+    }
     o.outline(
-        Layer::Over,
+        Layer::Top,
         r.x as f32,
         r.y as f32,
         r.w as f32,

@@ -9,8 +9,8 @@ use sonorant_core::runtime::PaneCurves;
 use sonorant_core::settings::{CurveStyle, Settings};
 use sonorant_core::store::{self, Store};
 use sonorant_render::{
-    BandLayout, CurveData, CurveLook, CurvePass, CurveView, DeckState, GpuTimer, HistoryStore,
-    Layer, Overlay, PaneView, Readback, Rect, RowIn, ScopeLayout, SpectrogramPass, TrackInfo,
+    ArtworkPass, BandLayout, CurveData, CurveLook, CurvePass, CurveView, DeckState, GpuTimer,
+    HistoryStore, Layer, Overlay, PaneView, Readback, Rect, RowIn, ScopeLayout, SpectrogramPass,
     Visuals, WaveRing, axes, bloom, deck,
 };
 use winit::application::ApplicationHandler;
@@ -21,10 +21,12 @@ use winit::window::{Fullscreen, Window, WindowId};
 
 use crate::audio::{Audio, Input};
 use crate::gpu::Gpu;
+use crate::nowplaying::NowPlaying;
 use crate::options::Options;
 use crate::pacing::FramePacing;
 use crate::present::PresentMonitor;
 use crate::ui::{self, Status, UiState};
+use sonorant_core::source::SourceStatus;
 
 /// How often the status line's numbers change, so they can be read.
 const STATUS_EVERY: Duration = Duration::from_millis(250);
@@ -99,7 +101,14 @@ struct Running {
     /// The colour bar down the right edge, or empty.
     colour_bar: Rect,
     waves: WaveRing,
-    track: TrackInfo,
+    /// The cover and the backdrop, and the quads they are drawn as.
+    artwork: ArtworkPass,
+    now_playing: NowPlaying,
+    /// Whether capture may be re-pointed at the player. A `--wav` or `--app` run is
+    /// the user saying exactly what to capture, so it is left alone.
+    capture_follows: bool,
+    /// A target that could not be opened, so it isn't retried every frame.
+    capture_failed: Option<Input>,
     columns: usize,
     held: Option<u64>,
     pacing: FramePacing,
@@ -141,6 +150,7 @@ impl App {
             (None, None) => Input::System,
         };
         let columns = 512;
+        let input_kind = input.clone();
         let audio_config = AnalysisConfig::from_settings(&settings, columns);
         let opening = std::thread::Builder::new()
             .name("sonorant-open-capture".into())
@@ -193,6 +203,7 @@ impl App {
         let curves = CurvePass::new(&gpu.device, gpu.config.format);
         curves.set_palette(&gpu.queue, &lut);
         let overlay = Overlay::new(&gpu.device, &gpu.queue, gpu.config.format);
+        let artwork = ArtworkPass::new(&gpu.device, gpu.config.format, bloom::TARGET_FORMAT);
         let visuals = Visuals::new(
             &gpu.device,
             gpu.view_format,
@@ -276,7 +287,10 @@ impl App {
             last_band: BandLayout::default(),
             colour_bar: Rect::EMPTY,
             waves: WaveRing::new(4096),
-            track: TrackInfo::default(),
+            artwork,
+            now_playing: NowPlaying::start(),
+            capture_follows: matches!(input_kind, Input::System),
+            capture_failed: None,
             columns,
             held: None,
             pacing: FramePacing::new(refresh_hz),
@@ -604,6 +618,26 @@ impl Running {
         } else {
             self.status.capture = "no capture".into();
         }
+        // Say whose sound this is when capture went looking for it: "MusicBee, 48 kHz"
+        // alone doesn't tell you whether that was chosen or followed.
+        if self.capture_follows
+            && self.ui.capture == ui::Capture::FollowPlayer
+            && let Some(audio) = &self.audio
+            && matches!(audio.input(), Input::App(_))
+            && let Some(player) = self.now_playing.player()
+        {
+            self.status.capture = format!("following {}  ·  {}", player.name, self.status.capture);
+        }
+
+        // Now playing, and the programme measures starting again on a track change.
+        if self
+            .now_playing
+            .poll(now, &self.gpu.device, &self.gpu.queue, &self.artwork)
+            && let Some(audio) = &self.audio
+        {
+            audio.reset_track();
+        }
+        self.follow_capture();
 
         if now.duration_since(self.status_at) >= STATUS_EVERY {
             self.status_at = now;
@@ -615,8 +649,9 @@ impl Running {
         let raw_input = self.egui_state.take_egui_input(&self.window);
         let mut area = egui::Rect::NOTHING;
         let present_modes = self.gpu.present_modes.clone();
+        let players = self.now_playing.players().to_vec();
         let mut full_output = self.egui_ctx.run_ui(raw_input, |ui| {
-            area = ui::show(ui, &mut self.ui, &present_modes);
+            area = ui::show(ui, &mut self.ui, &present_modes, &players);
         });
         let mut textures = std::mem::take(&mut full_output.textures_delta);
         self.egui_state
@@ -752,9 +787,10 @@ impl Running {
             brightness_hz: map.x_to_freq(self.brightness * map.width as f64),
             scope_left: &self.scope.0,
             scope_right: &self.scope.1,
-            track: &self.track,
-            position: None,
-            playing: false,
+            track: self.now_playing.track(),
+            position: self.now_playing.position(now),
+            playing: self.now_playing.playing(),
+            has_art: self.now_playing.art().is_some(),
         };
         deck::draw_band(
             &mut self.overlay,
@@ -791,6 +827,14 @@ impl Running {
             );
         }
         self.overlay.prepare(&self.gpu.device, &self.gpu.queue);
+        self.artwork.prepare(
+            &self.gpu.queue,
+            (self.gpu.config.width, self.gpu.config.height),
+            self.deck_art(),
+            // The furniture fade arrives with the rest of immersive mode in Phase 5.
+            1.0,
+            self.backdrop_strength(),
+        );
 
         let mut encoder = self
             .gpu
@@ -841,6 +885,13 @@ impl Running {
                     multiview_mask: None,
                 })
                 .forget_lifetime();
+            // Under the analysis, not over it: wherever the spectrogram has data it
+            // covers this, and wherever it hasn't the art shows through.
+            if self.backdrop_strength() > 0.0
+                && let Some(art) = self.now_playing.art()
+            {
+                self.artwork.draw_backdrop(&mut pass, art);
+            }
             self.spectrogram.draw(&mut pass, &panes);
         }
         if glow {
@@ -892,6 +943,13 @@ impl Running {
             self.overlay.draw(Layer::Under, &mut pass);
             self.curves.draw(&mut pass);
             self.overlay.draw(Layer::Over, &mut pass);
+            // Between the two: over the deck's backing, under the frame the deck
+            // draws on Top, which is the order GDI+ painted them in.
+            if self.deck_art().w > 0
+                && let Some(art) = self.now_playing.art()
+            {
+                self.artwork.draw_deck(&mut pass, art);
+            }
             self.overlay.draw(Layer::Top, &mut pass);
         }
         {
@@ -950,6 +1008,71 @@ impl Running {
         for id in textures.free.drain() {
             self.egui_renderer.free_texture(&id);
         }
+    }
+
+    /// Points capture at whatever the followed player is using.
+    ///
+    /// Switching costs the audio clock its bearings, so this changes as little as it
+    /// can: it moves to a player when there is one with a process to follow, and back
+    /// to the whole mix only when the player has gone or the source it was on has
+    /// stopped working. A player pausing is not a reason to move.
+    fn follow_capture(&mut self) {
+        if !self.capture_follows {
+            return;
+        }
+        let Some(audio) = &self.audio else { return };
+        let on_app = matches!(audio.input(), Input::App(_));
+        // The source can only say it has failed once it has tried, so a target that
+        // has gone shows up here rather than in the player list.
+        let source_gone = matches!(
+            audio.status,
+            SourceStatus::NoDevice | SourceStatus::Failed(_)
+        );
+        let want = match self.ui.capture {
+            ui::Capture::WholeSystem => Input::System,
+            ui::Capture::FollowPlayer => match self.now_playing.player().and_then(|p| p.pid) {
+                Some(pid) => Input::App(pid.to_string()),
+                None if on_app && !source_gone => return,
+                None => Input::System,
+            },
+        };
+        if *audio.input() == want {
+            self.capture_failed = None;
+            return;
+        }
+        if self.capture_failed.as_ref() == Some(&want) {
+            return;
+        }
+        let Some(audio) = &mut self.audio else { return };
+        match audio.set_input(&want) {
+            Ok(()) => {
+                log::info!("capture now follows {want:?}");
+                self.capture_failed = None;
+                self.waves.clear();
+            }
+            Err(e) => {
+                log::warn!("cannot capture {want:?}: {e}");
+                self.capture_failed = Some(want);
+            }
+        }
+    }
+
+    /// Where the cover goes, or nothing when the deck has no room or it is turned off.
+    fn deck_art(&self) -> Rect {
+        if self.settings.show_center_deck {
+            self.band.deck.art
+        } else {
+            Rect::EMPTY
+        }
+    }
+
+    /// How far the backdrop comes forward, from 0 to 1. Nostalgia+ capped the setting
+    /// at 60 per cent, past which the analysis stops being readable.
+    fn backdrop_strength(&self) -> f32 {
+        if !self.settings.immersive || !self.settings.imm_backdrop {
+            return 0.0;
+        }
+        self.settings.backdrop_pct.clamp(0, 60) as f32 / 100.0
     }
 
     /// What the status line says: the source, the transform sizes, the channel pair,
@@ -1094,6 +1217,9 @@ impl Running {
         self.settings.scale = new.scale;
         if analysis_changed && let Some(audio) = &self.audio {
             audio.set_config(AnalysisConfig::from_settings(&self.settings, self.columns));
+        }
+        if new.follow != old.follow {
+            self.now_playing.set_follow(new.follow.clone());
         }
         if new.present_mode != old.present_mode {
             self.gpu.set_present_mode(new.present_mode);

@@ -25,6 +25,8 @@ pub struct Audio {
     source: Box<dyn AudioSource>,
     analysis: Analysis,
     events: Receiver<SourceEvent>,
+    /// What capture is pointed at, so it isn't reopened for the target it already has.
+    input: Input,
     pub status: SourceStatus,
     pub sample_rate: f64,
     clock: AudioClock,
@@ -41,14 +43,52 @@ impl Audio {
             source,
             analysis,
             events: rx,
+            input: input.clone(),
             status: SourceStatus::Starting,
             sample_rate: rate,
             clock: AudioClock::default(),
         })
     }
 
+    pub fn input(&self) -> &Input {
+        &self.input
+    }
+
+    /// Points capture somewhere else without disturbing the analysis.
+    ///
+    /// The new source is opened before the old one is stopped, so a target that turns
+    /// out to be unreachable leaves the picture running on what it had. The analysis
+    /// thread is handed a new ring and stops reading the old one, so nothing either
+    /// source pushes in between can be interleaved into the wrong stream.
+    pub fn set_input(&mut self, input: &Input) -> Result<(), String> {
+        if self.input == *input {
+            return Ok(());
+        }
+        let (mut source, rate) = open(input)?;
+        self.source.stop();
+        let (tx, rx) = channel();
+        source.start(self.analysis.take_input(), tx);
+        self.source = source;
+        self.events = rx;
+        self.input = input.clone();
+        self.status = SourceStatus::Starting;
+        if rate != self.sample_rate {
+            self.sample_rate = rate;
+            self.analysis.send(Command::SampleRate(rate));
+        }
+        // Wall time and audio time have to find each other again from the new stream.
+        self.clock = AudioClock::default();
+        Ok(())
+    }
+
     pub fn set_config(&self, config: AnalysisConfig) {
         self.analysis.send(Command::Config(config));
+    }
+
+    /// A new track started: the programme measures - integrated loudness, range, BPM
+    /// and overs - start again rather than averaging the last track into this one.
+    pub fn reset_track(&self) {
+        self.analysis.send(Command::ResetTrack);
     }
 
     /// Handles the source's news. Call once a frame.

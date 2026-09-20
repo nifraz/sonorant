@@ -4,16 +4,30 @@
 //! pieces that model will drive: checkboxes, radio groups, submenus and shortcuts.
 
 use sonorant_core::dsp::{ChannelPairMode, FreqScale};
+use sonorant_core::media::{Follow, Player};
 use sonorant_core::palette::PaletteKind;
 use sonorant_core::settings::Settings;
 
 use crate::pacing::PacingStats;
 use crate::present::PresentCounts;
 
+/// What capture listens to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Capture {
+    /// Whatever the followed player is playing through, falling back to the whole mix
+    /// when there is no player to follow.
+    #[default]
+    FollowPlayer,
+    /// Everything the machine is playing, whoever is playing it.
+    WholeSystem,
+}
+
 /// What the menu and keys control.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UiState {
     pub frozen: bool,
+    pub capture: Capture,
+    pub follow: Follow,
     pub palette: PaletteKind,
     pub pair_mode: ChannelPairMode,
     pub scale: FreqScale,
@@ -30,6 +44,8 @@ impl UiState {
     pub fn from_settings(s: &Settings, fullscreen: bool) -> UiState {
         UiState {
             frozen: false,
+            capture: Capture::default(),
+            follow: Follow::default(),
             palette: s.palette,
             pair_mode: s.pair_mode,
             scale: s.scale,
@@ -60,6 +76,7 @@ pub fn show(
     ui: &mut egui::Ui,
     state: &mut UiState,
     present_modes: &[wgpu::PresentMode],
+    players: &[Player],
 ) -> egui::Rect {
     // The status line itself is drawn by the renderer, over the image, where
     // Nostalgia+ had it; egui only carries the menu.
@@ -72,12 +89,39 @@ pub fn show(
             if response.clicked() {
                 state.frozen = !state.frozen;
             }
-            response.context_menu(|ui| menu(ui, state, present_modes));
+            response.context_menu(|ui| menu(ui, state, present_modes, players));
         });
     area
 }
 
-fn menu(ui: &mut egui::Ui, state: &mut UiState, present_modes: &[wgpu::PresentMode]) {
+fn menu(
+    ui: &mut egui::Ui,
+    state: &mut UiState,
+    present_modes: &[wgpu::PresentMode],
+    players: &[Player],
+) {
+    ui.menu_button("Capture", |ui| {
+        ui.radio_value(
+            &mut state.capture,
+            Capture::FollowPlayer,
+            "Following player",
+        );
+        ui.radio_value(&mut state.capture, Capture::WholeSystem, "Whole system");
+    });
+    ui.menu_button("Follow player", |ui| {
+        ui.radio_value(&mut state.follow, Follow::Whichever, "Whichever is playing");
+        if players.is_empty() {
+            ui.add_enabled(false, egui::Button::new("No players running"));
+        }
+        for player in players {
+            // Pinning is by id, because two windows of the same app share a name.
+            let pinned = state.follow == Follow::Pinned(player.id.clone());
+            if ui.radio(pinned, &player.name).clicked() {
+                state.follow = Follow::Pinned(player.id.clone());
+            }
+        }
+    });
+    ui.separator();
     ui.menu_button("Channels", |ui| {
         for (mode, label) in [
             (ChannelPairMode::LeftRight, "Left and right"),

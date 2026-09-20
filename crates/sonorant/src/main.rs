@@ -10,6 +10,7 @@
 mod app;
 mod audio;
 mod gpu;
+mod nowplaying;
 mod options;
 mod pacing;
 mod present;

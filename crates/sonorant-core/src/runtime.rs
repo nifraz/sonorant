@@ -144,6 +144,12 @@ pub enum Command {
     SampleRate(f64),
     /// A new track: the programme measures start again.
     ResetTrack,
+    /// Capture was pointed somewhere else: read from this ring from now on.
+    ///
+    /// The old ring is simply let go of. Its producer lives until the source it
+    /// belongs to has stopped, and pushing into a ring nobody reads is harmless -
+    /// which is what lets the source be swapped without either side waiting.
+    Input(rtrb::Consumer<f32>, Arc<AtomicU64>),
     Stop,
 }
 
@@ -206,6 +212,19 @@ impl Analysis {
         let _ = self.commands.send(command);
     }
 
+    /// A fresh capture side, for a source that is replacing the one running now.
+    ///
+    /// The analysis thread reads from the new ring as soon as it sees the command, so
+    /// the old source can be stopped before or after this without a gap either side
+    /// mattering: whatever it pushes in between goes into a ring that is no longer
+    /// read.
+    pub fn take_input(&self) -> AudioInput {
+        let (tx, rx) = rtrb::RingBuffer::new(AUDIO_RING_FRAMES * 2);
+        let dropped = Arc::new(AtomicU64::new(0));
+        self.send(Command::Input(rx, dropped.clone()));
+        AudioInput { ring: tx, dropped }
+    }
+
     /// The newest state. Never waits.
     pub fn latest(&mut self) -> &Snapshot {
         self.latest.update();
@@ -247,6 +266,10 @@ fn run(
                     }
                 }
                 Command::ResetTrack => engine.reset_track(),
+                Command::Input(ring, dropped) => {
+                    audio = ring;
+                    sink.dropped_frames = dropped;
+                }
                 Command::Stop => return,
             }
         }

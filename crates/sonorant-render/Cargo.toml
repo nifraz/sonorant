@@ -15,6 +15,7 @@ glyphon = { workspace = true }
 bytemuck = { workspace = true }
 half = { workspace = true }
 png = { workspace = true }
+zune-jpeg = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]

@@ -15,6 +15,7 @@ use sonorant_core::dsp::{FreqScale, FrequencyMap, LoudnessReadings};
 use sonorant_core::engine::{GRID_BINS, GRID_FMAX, GRID_FMIN};
 use sonorant_core::palette::{self, PaletteKind};
 use sonorant_core::settings::Settings;
+use sonorant_render::artwork::{ArtworkPass, Picture};
 use sonorant_render::band::BandLayout;
 use sonorant_render::bloom::{self, Visuals};
 use sonorant_render::curves::{CurveData, CurveLook, CurvePass, CurveView};
@@ -30,6 +31,8 @@ use half::f16;
 const WIDTH: u32 = 960;
 const HEIGHT: u32 = 540;
 const ROWS: u32 = 512;
+/// How far the backdrop comes forward in the scene, as the settings' percentage does.
+const BACKDROP_STRENGTH: f32 = 0.18;
 /// Average difference per channel a golden may drift by, out of 255.
 const MEAN_TOLERANCE: f64 = 1.5;
 /// The most any one channel may differ by.
@@ -135,6 +138,12 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue) -> (u32, u32, Vec<u8>) {
     let mut curves = CurvePass::new(device, wgpu::TextureFormat::Rgba8Unorm);
     curves.set_palette(queue, &lut);
     let mut overlay = Overlay::new(device, queue, wgpu::TextureFormat::Rgba8Unorm);
+    let artwork = ArtworkPass::new(
+        device,
+        wgpu::TextureFormat::Rgba8Unorm,
+        bloom::TARGET_FORMAT,
+    );
+    let cover = artwork.upload(device, queue, &test_cover());
 
     // The same layout the app builds: panes above, band below, colour bar at the edge.
     let client = Rect::new(0, 0, WIDTH as i32, HEIGHT as i32);
@@ -271,6 +280,7 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue) -> (u32, u32, Vec<u8>) {
             track: &track,
             position: Some((62.0, 245.0)),
             playing: true,
+            has_art: true,
         },
         1.0,
         label_px,
@@ -294,6 +304,13 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue) -> (u32, u32, Vec<u8>) {
         label_px,
     );
     overlay.prepare(device, queue);
+    artwork.prepare(
+        queue,
+        (WIDTH, HEIGHT),
+        band.deck.art,
+        1.0,
+        BACKDROP_STRENGTH,
+    );
 
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("golden"),
@@ -331,6 +348,7 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue) -> (u32, u32, Vec<u8>) {
                 multiview_mask: None,
             })
             .forget_lifetime();
+        artwork.draw_backdrop(&mut pass, &cover);
         spectrogram.draw(&mut pass, &panes);
     }
     visuals.build_glow(queue, &mut encoder, None);
@@ -377,11 +395,36 @@ fn render(device: &wgpu::Device, queue: &wgpu::Queue) -> (u32, u32, Vec<u8>) {
         overlay.draw(Layer::Under, &mut pass);
         curves.draw(&mut pass);
         overlay.draw(Layer::Over, &mut pass);
+        // At this size the layout spends the deck's width on the track info instead,
+        // as Nostalgia+'s does; `the_cover_fills_its_frame` covers the drawing.
+        if band.deck.art.w > 0 {
+            artwork.draw_deck(&mut pass, &cover);
+        }
         overlay.draw(Layer::Top, &mut pass);
     }
     let shot = Readback::record(device, &mut encoder, &target);
     queue.submit([encoder.finish()]);
     shot.pixels(device).expect("the frame reads back")
+}
+
+/// A stand-in album cover: a two-way gradient with a dark border, so both the deck's
+/// stretch and the backdrop's reduction show whether they ran.
+fn test_cover() -> Picture {
+    const SIZE: u32 = 128;
+    let mut p = Picture::solid(SIZE, SIZE, [0, 0, 0, 255]);
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let i = ((y * SIZE + x) * 4) as usize;
+            let edge = x < 6 || y < 6 || x >= SIZE - 6 || y >= SIZE - 6;
+            if edge {
+                continue;
+            }
+            p.rgba[i] = (x * 255 / SIZE) as u8;
+            p.rgba[i + 1] = (y * 255 / SIZE) as u8;
+            p.rgba[i + 2] = 200 - (x * 120 / SIZE) as u8;
+        }
+    }
+    p
 }
 
 /// The mean and worst difference between two pictures, per channel out of 255.
@@ -404,6 +447,83 @@ fn read_png(path: &Path) -> Option<(u32, u32, Vec<u8>)> {
     let info = reader.next_frame(&mut buf).ok()?;
     buf.truncate(info.buffer_size());
     Some((info.width, info.height, buf))
+}
+
+/// The cover goes where the deck's frame is, and nowhere else.
+///
+/// The scene golden covers the backdrop, which is drawn over the whole window, but the
+/// deck only has room for a cover at sizes the scene isn't rendered at. This draws the
+/// same pass on its own and checks where the pixels landed.
+#[test]
+fn the_cover_fills_its_frame() {
+    const SIDE: u32 = 64;
+    let Some((device, queue, _, _)) = open_gpu() else {
+        eprintln!("no GPU here; skipping the cover render");
+        return;
+    };
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("cover"),
+        size: wgpu::Extent3d {
+            width: SIDE,
+            height: SIDE,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let artwork = ArtworkPass::new(
+        &device,
+        wgpu::TextureFormat::Rgba8Unorm,
+        bloom::TARGET_FORMAT,
+    );
+    let cover = artwork.upload(&device, &queue, &Picture::solid(8, 8, [255, 0, 0, 255]));
+    let frame = Rect::new(16, 8, 32, 24);
+    artwork.prepare(&queue, (SIDE, SIDE), frame, 1.0, 0.0);
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("cover"),
+    });
+    {
+        let mut pass = encoder
+            .begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("cover"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            })
+            .forget_lifetime();
+        artwork.draw_deck(&mut pass, &cover);
+    }
+    let shot = Readback::record(&device, &mut encoder, &target);
+    queue.submit([encoder.finish()]);
+    let (w, _h, pixels) = shot.pixels(&device).expect("the frame reads back");
+    let at = |x: u32, y: u32| {
+        let i = ((y * w + x) * 4) as usize;
+        [pixels[i], pixels[i + 1], pixels[i + 2]]
+    };
+    // Inside the frame, the cover; a pixel out on every side, the black it was cleared
+    // to. The corners catch a quad that is flipped or off by a row.
+    assert_eq!(at(17, 9), [255, 0, 0], "the top left of the frame");
+    assert_eq!(at(46, 30), [255, 0, 0], "the bottom right of the frame");
+    assert_eq!(at(15, 20), [0, 0, 0], "left of the frame");
+    assert_eq!(at(48, 20), [0, 0, 0], "right of the frame");
+    assert_eq!(at(30, 6), [0, 0, 0], "above the frame");
+    assert_eq!(at(30, 33), [0, 0, 0], "below the frame");
 }
 
 #[test]

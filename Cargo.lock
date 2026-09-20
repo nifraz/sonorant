@@ -1121,6 +1121,7 @@ dependencies = [
  "png",
  "pollster",
  "wgpu",
+ "zune-jpeg",
 ]
 
 [[package]]
