@@ -1,7 +1,7 @@
 //! What the media session sees, printed as it changes. For checking a real player
 //! without running the whole app.
 //!
-//! `cargo run -p sonorant-platform --example now_playing`
+//! `cargo run -p sonorant-platform --example now_playing [seconds]`
 
 #![allow(clippy::print_stdout)] // a command-line report
 
@@ -9,25 +9,32 @@ use std::time::{Duration, Instant};
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
+    let seconds = std::env::args()
+        .nth(1)
+        .and_then(|a| a.parse::<u64>().ok())
+        .unwrap_or(20);
     #[cfg(windows)]
-    watch(sonorant_platform::windows::SmtcSession::start());
+    watch(sonorant_platform::windows::SmtcSession::start(), seconds);
     #[cfg(target_os = "linux")]
     match sonorant_platform::linux::MprisSession::start() {
-        Ok(session) => watch(session),
+        Ok(session) => watch(session, seconds),
         Err(e) => println!("no MPRIS: {e}"),
     }
     #[cfg(not(any(windows, target_os = "linux")))]
-    println!("no media session on this platform");
+    {
+        let _ = seconds;
+        println!("no media session on this platform");
+    }
 }
 
 #[cfg(any(windows, target_os = "linux"))]
-fn watch(session: impl sonorant_core::media::MediaSession) {
+fn watch(session: impl sonorant_core::media::MediaSession, seconds: u64) {
     use sonorant_core::media::PositionClock;
 
     let mut clock = PositionClock::new();
     let mut seen = u64::MAX;
-    let until = Instant::now() + Duration::from_secs(20);
-    println!("watching for 20 seconds...");
+    let until = Instant::now() + Duration::from_secs(seconds);
+    println!("watching for {seconds} seconds...");
     while Instant::now() < until {
         let s = session.snapshot();
         let now = Instant::now();

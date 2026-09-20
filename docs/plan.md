@@ -174,9 +174,9 @@ are met or explained (see [Measurements](#measurements)). The next session start
   with a settings folder of its own, and `sonorant-core`'s `hop_times` example prints
   the per-hop distribution. All three are for checking work without a screen capture.
 
-Three pieces are written but can only be finished later, and have moved:
+Three pieces were written but could only be finished later, and moved:
 
-- **The backdrop** needs album art, so it moves to Phase 4 with the media session.
+- **The backdrop** needed album art, and arrived with it in Phase 4.
 - **The harmonic ruler** is drawn from the hover position, so it moves to Phase 5 with
   the hover readout.
 - **The quick bar** is a strip of buttons that do nothing until the menu model and input
@@ -187,25 +187,72 @@ the screenshots in `tests/reference/screenshots/`: those were taken before the c
 deck was rebuilt, and still show the title and loudness figures floating in the screen's
 top corners.
 
+**Phase 4 (now playing): written on both platforms; not yet seen following a player**
+
+- [x] **The `MediaSession` trait and the now-playing types** (`sonorant-core::media`):
+  the followed player, its metadata, artwork, play state, capabilities and transport
+  commands, published as a snapshot the frame loop copies out of a mutex. Nothing in
+  the frame ever waits on WinRT or D-Bus.
+- [x] **The position clock.** Neither platform reports the position continuously, so a
+  reading is kept with the instant it was taken and carried forward from there,
+  resyncing about once a second while playing. It holds where it was on a pause, never
+  runs past the end, and is unit-tested.
+- [x] **SMTC** (`windows/smtc.rs`) on its own thread, driven by the session manager's
+  and the session's change events with a one-second fallback tick. Thumbnails are read
+  once a track, and `LastUpdatedTime` says how old a position reading already was, so
+  the seek bar is right rather than a second fast. **Two fields stay empty on Windows:
+  SMTC carries no composer and no year.**
+- [x] **MPRIS** (`linux/mpris.rs`) over zbus: every deck field from `xesam:*`, the year
+  from `contentCreated`, the length from `mpris:length`, artwork from `mpris:artUrl`,
+  and the player's process id from `GetConnectionUnixProcessID`. Players are polled
+  every 400 ms with one `GetAll` each rather than subscribed to; `PropertiesChanged`
+  and `Seeked` are the refinement, and cost up to 400 ms on a track change until then.
+- [x] **Artwork** (`render/artwork.rs`): PNG and JPEG decoded off the frame loop, fitted
+  to 512 pixels, and uploaded as two pictures. The deck draws the cover stretched into
+  its square, between the overlay's layers so the frame lands on top of it as GDI+
+  painted it; the backdrop draws a 40-pixel copy over the whole window, into the visuals
+  target before the spectrogram, so it is ground the analysis covers. That is Phase 3's
+  last deferred piece.
+- [x] **Track-change resets:** a new track id starts LUFS-I, LRA, BPM and overs again.
+  Players that report no id fall back to the title and album, which catches a change
+  without throwing away a minute of integrated loudness on a metadata refresh.
+- [x] **Capture follows the player.** The analysis thread can be handed a new ring, so
+  the source is swapped without restarting analysis or interleaving two streams. Capture
+  moves to the followed player's process when there is one and back to the whole mix
+  only when that player has gone or its source has stopped: a pause is not a reason to
+  move, because every switch costs the audio clock its bearings. A Capture menu and a
+  "Follow player" submenu choose between them, and the status line says what it
+  followed. A `--wav` or `--app` run is left alone.
+- [x] The Linux code compiles for the first time. PipeWire needs its development
+  headers, so capture moved behind a default feature; with it off, `cargo check --target
+  x86_64-unknown-linux-gnu --no-default-features` builds and lints the crate from
+  Windows. MPRIS is checked and linted this way. PipeWire capture still is not.
+- [ ] **Run against real players.** Nothing here has been seen working: Windows needs
+  MusicBee, Spotify and a browser; Ubuntu needs Rhythmbox, Strawberry, Spotify, Firefox
+  and VLC, and a Linux machine. `cargo run -p sonorant-platform --example now_playing`
+  prints what the session sees, on either platform, without the app.
+- [ ] **`https://` artwork.** Spotify and the browsers report web URLs over MPRIS.
+  Reaching them needs an HTTP client and a TLS stack, which is a download-size decision
+  held until the size pass; the `ArtFetcher` seam is there and the loader logs what it
+  skipped. Until then those players show the empty frame on Ubuntu. On Windows it does
+  not arise: SMTC hands over the thumbnail itself.
+
 ### Next
 
-Phase 4, now playing. In order:
+Phase 5, the app shell: the views, every key and hover readout, the menu built from the
+model, presets, the OS accent colour, and the HiDPI pass. Two pieces from Phase 3 are
+waiting there for it - the harmonic ruler, which is drawn from the hover position, and
+the quick bar, whose buttons need input to do anything. Phase 4 leaves the deck's
+transport wired on the inside but with nothing to press it: `NowPlaying::send` already
+refuses a control the player says it cannot do, and Phase 5 connects the buttons.
 
-1. The `MediaSession` trait and SMTC on Windows: the fields the deck already lays out
-   (title, artists, album, composer, year, artwork, position, length, play state), with
-   the position cached and extrapolated between updates.
-2. Artwork: the deck's frame is drawn and waiting for it, and the immersive backdrop
-   needs it too.
-3. MPRIS over zbus on Linux, and the track-change resets (LUFS-I, LRA, BPM, overs).
-4. Capture following the player, with the status line saying what it followed.
-
-Also open from earlier phases: push to GitHub and get CI green, which includes the first
-PipeWire build and the first lavapipe golden, and the checks on other machines listed
-above. A WSL Ubuntu on the reference PC would let the Linux code compile before CI
-exists. Two smaller things: the first frame's 100-odd ms of lazy initialisation (logged
-as a stall) could move into start-up, and the deck's fixed pixel sizes are laid out in
-physical pixels, which is right at 100% scaling and cramped at 150% until Phase 5's
-HiDPI pass.
+Before that, or alongside it, the things that need a machine this one isn't: push to
+GitHub and get CI green, which is the first PipeWire build and the first lavapipe
+golden; then the player checks above. Two smaller things carried over: the first frame's
+100-odd ms of lazy initialisation (logged as a stall) could move into start-up, and the
+deck's fixed pixel sizes are laid out in physical pixels, which is right at 100% scaling
+and cramped at 150% until Phase 5's HiDPI pass. One new one: swapping the capture source
+happens on the frame loop's thread, so following a player costs a frame.
 
 ### Measurements
 
