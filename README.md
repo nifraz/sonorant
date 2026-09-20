@@ -9,18 +9,20 @@ plan, with every decision and phase, is in [docs/plan.md](docs/plan.md).
 
 ## Status
 
-Early work: Phases 0 to 5 are done, so the app captures, analyses and draws the parity
-views, follows whatever is playing, and runs off its own menu; Phase 6, the new visuals,
-is next. What each phase still leaves open is in [Progress](docs/plan.md#progress) in
-the plan.
+Early work: Phases 0 to 6 are written, so the app captures, analyses and draws the parity
+views, follows whatever is playing, runs off its own menu, and has the five visuals that
+are new here: the phosphor scope, the zoomable long history, the beat-reactive backdrop,
+the 3D waterfall and the quality setting that scales them. Phase 7, tuning and polish, is
+next. What each phase still leaves open is in [Progress](docs/plan.md#progress) in the
+plan.
 
 | Part | State |
 |---|---|
 | `sonorant-dsp` | Verified against Nostalgia+'s reference vectors: the multi-resolution FFT bank, all six windows, mid/side and single-channel modes, BS.1770 loudness and true peak, overs, dynamic range, curve shaping and ballistics, notes, tempo and brightness |
 | `sonorant-core` | Every setting and preset, TOML settings, presets and themes, the Nostalgia+ importer, palettes, the analysis engine and thread, and a WAV source |
-| `sonorant-platform` | Windows: WASAPI loopback of the whole system or one app, and now playing from SMTC. Linux: PipeWire capture and now playing from MPRIS, neither yet run on a Linux machine |
-| `sonorant-render` | The whole picture: the pane and deck layouts, the GPU history store, the spectrogram, the curve strips, a text and shape overlay (IBM Plex, bundled) carrying the grid, scales and labels, the waveform lanes, goniometer, meters and readouts, the colour bar and status line, the floating-point target and its glow, GPU pass timing, and golden renders |
-| `sonorant` | The app: the window and the frame loop, the menu and the keyboard over one model, the searchable help, the hover readout, the quick bar and the transport; `sonorant capture` runs the pipeline without a window |
+| `sonorant-platform` | Windows: WASAPI loopback of the whole system or one app, and now playing from SMTC. Linux: PipeWire capture, and now playing from MPRIS, which has been seen following a real player |
+| `sonorant-render` | The whole picture: the pane and deck layouts, the GPU history store, the spectrogram, the curve strips, a text and shape overlay (IBM Plex, bundled) carrying the grid, scales and labels, the waveform lanes, goniometer, meters and readouts, the colour bar and status line, the floating-point target and its glow, GPU pass timing, and golden renders. The new visuals too: the phosphor screen, the beat-reactive backdrop and the 3D waterfall |
+| `sonorant` | The app: the window and the frame loop, the menu and the keyboard over one model, the searchable help, the hover readout, the quick bar and the transport, and the wheel and drag that walk back through the history or orbit the waterfall; `sonorant capture` runs the pipeline without a window |
 
 ## Building
 
