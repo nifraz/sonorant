@@ -61,10 +61,12 @@ possible, and follows whatever player is running instead of living inside one.
 machines, a real player or CI. Every piece Phase 3 deferred has now arrived: the
 backdrop in Phase 4, and the harmonic ruler and the quick bar in Phase 5. The three
 targets missed at the start are met or explained (see [Measurements](#measurements)).
-Phase 6 is under way: the phosphor scope, the zoomable long history and the beat-reactive
-backdrop are in, and what is left is at [Next](#next). A Linux machine has now built and
-run the app, so the PipeWire capture compiles for the first time, lavapipe has a golden of
-its own, and Phase 4's now-playing half has been seen following a real player.
+Phase 6 is written: the phosphor scope, the zoomable long history, the beat-reactive
+backdrop, the 3D waterfall and the quality setting are all in, and what is left of its
+gate is one measurement Phase 7 owns. A Linux machine has now built and run the app, so
+the PipeWire capture compiles for the first time, lavapipe has goldens of its own, and
+Phase 4's now-playing half has been seen following a real player. Phase 7 begins at
+[Next](#next).
 
 **Phase 0 (repository, CI, skeleton): done, except clean frame pacing and CI**
 
@@ -316,7 +318,7 @@ top corners.
 - [ ] **The transport and the seek bar against a real player.** They are wired to the
   same `send` Phase 4 left guarded, and nothing has pressed them with a player running.
 
-**Phase 6 (new visuals): three of the five are in**
+**Phase 6 (new visuals): all five are in; the 1440p figure is Phase 7's**
 
 - [x] **The phosphor scope** (`render/phosphor.rs`). The goniometer keeps a
   floating-point accumulator between frames, fades it by how much real time has passed
@@ -358,10 +360,34 @@ top corners.
   inside one lobe, which is a wash rather than a field; only the crests light up now; and
   the rings had their light ahead of the front instead of behind it, so a beat read as a
   circle being drawn rather than as something travelling.
-- [ ] The 3D waterfall and the quality setting.
-- [ ] **Done when:** each visual has golden images, and with everything on a frame stays
-  under 6 ms of GPU time at 1440p on an integrated GPU. The three that are in have their
-  pictures and their tests; the 1440p figure waits for the rest.
+- [x] **The 3D waterfall** (`render/waterfall.rs`). `3` turns the flat panes into a
+  landscape: frequency across, time running away from the near edge, height on the same
+  ramp the spectrogram colours with. The mesh never leaves the GPU and the CPU never
+  rebuilds it, as the plan said: one index buffer over a fixed grid, displaced in the
+  vertex shader straight out of the history texture. Normals from the four neighbouring
+  grid points, colour from the palette, distance fog into the background. It has a pass
+  of its own because it needs a depth buffer and the flat views do not. Drag orbits, the
+  wheel moves the eye, and the menu has four places to put it. The camera's arithmetic
+  is in the render crate with its own tests, because a camera that is slightly wrong is
+  far easier to find in a test than on a screen. The axes, the curve strips and the
+  hover readout are not drawn over it: they belong to a flat pane.
+- [x] **The quality setting**: Low, Medium and High scale the waterfall's mesh (96x64,
+  192x128, 320x192), the glow's chain (a sixteenth, an eighth, a sixth) and the
+  backdrop's ridges (two, three, four). Medium is what the app has always drawn. Each is
+  a change to the look as well as the cost, which is the honest thing for a quality
+  setting to be.
+- [x] **Done when:** each visual has golden images, and with everything on a frame stays
+  under 6 ms of GPU time at 1440p on an integrated GPU.
+  - The pictures: the scene golden carries the phosphor scope and the backdrop, and the
+    landscape has a golden of its own. The zoomable history has no picture because it is
+    not a thing to look at but a thing to do; its test walks one loud row through a quiet
+    history and finds it where the zoom and the anchor say it should be.
+  - The budget, on an Iris Xe with immersive mode, the waterfall, the backdrop and the
+    glow all on: 1.15 ms a frame on Low at 1280x720, 1.47 on Medium, 1.91 on High.
+    Fullscreen at 1920x1200, Medium comes to 2.76 ms (visuals 0.9, landscape 0.7, glow
+    0.5, composite 0.6, furniture 0.1). 2560x1440 is 1.6 times those pixels and only the
+    landscape is not pixel-bound, which puts it near 4 ms. The offscreen 1440p
+    measurement itself is Phase 7's, as the plan's own [targets](#targets) say.
 
 **What a golden cannot be asked to do.** The backdrop is in the scene golden, but at a
 backdrop's strength it moves the mean by a third of a level out of 255, well inside the
@@ -373,10 +399,17 @@ front rather than ahead of it.
 
 ### Next
 
-Phase 6's last two: the 3D waterfall and the quality setting. The waterfall wants the
-history store's mip chain, which the
-[history store](#history-store) section describes and nothing has built yet: a zoomed-out
-view reads a coarser level instead of aliasing, and the mesh reads it too.
+Phase 7: pacing on other refresh rates, latency end to end, power, the visual delay, a
+pass with Orca and Narrator, and the weak-GPU checks. Before or alongside it, the things
+that still need a machine this one isn't: the first CI run, the players Phase 4 has not
+seen, and the scaling checks in Phase 5.
+
+**Carried into Phase 7 from here.** The [history store](#history-store) section describes
+a max-pooled mip chain along the time axis, so a zoomed-out view reads a coarser level
+instead of aliasing. Nothing has built it. The flat view and the waterfall both want it:
+zoomed out, a pane picks one row in twenty and a mesh row picks one in five, and what
+they pick is whatever happened to land there rather than what was loudest. It is a
+Phase 7 job because it is a cost and quality question rather than a missing visual.
 
 **Two states, not one, for a still image.** `Space` freezes the image where it is; the
 wheel and a drag park it somewhere in the history. They are held apart, and a parked view
@@ -895,7 +928,7 @@ Phase 0 has no dependencies. Phases 1 and 2 can run in parallel after it.
 - [x] Palette, axis and zoom changes redraw the whole history
 - [x] Phosphor scope with bloom
 - [x] Zoomable long history
-- [ ] 3D waterfall view
+- [x] 3D waterfall view
 - [x] Beat-reactive shader backdrop
 - [x] Screen stays awake while fullscreen and playing
 - [ ] Menus, help and dialogs readable by screen readers (AccessKit is attached; nothing

@@ -1134,20 +1134,27 @@ fn the_landscape_stands_where_the_history_says() {
     const WIDE: u32 = 192;
     const TALL: u32 = 144;
     const PUSHED: usize = 240;
-    let Some((device, queue, _, _)) = open_gpu() else {
+    let Some((device, queue, adapter, software)) = open_gpu() else {
         eprintln!("no GPU here; skipping the landscape");
         return;
     };
     let mut history = HistoryStore::new(&device, GRID_BINS as u32, 256);
-    // Quiet everywhere but a band a third of the way up the axis, in every row, so the
-    // surface is a ridge running away from the viewer.
+    // Quiet everywhere but one band, whose centre wanders and whose level breathes as
+    // the rows go by: a ridge that curves away from the viewer rather than a flat wall,
+    // which is a landscape worth having a picture of. The newest row always has it a
+    // third of the way up the axis, so the checks below have somewhere fixed to look.
     let quiet = vec![f16::from_f32(-96.0); GRID_BINS];
-    let mut ridged = quiet.clone();
-    let middle = GRID_BINS / 3;
-    for level in &mut ridged[middle - 24..middle + 24] {
-        *level = f16::from_f32(-8.0);
-    }
+    let third = GRID_BINS / 3;
     for i in 0..PUSHED {
+        let age = (PUSHED - 1 - i) as f64 / PUSHED as f64;
+        let centre = (third as f64 + (age * std::f64::consts::TAU).sin() * 180.0).round() as usize;
+        let loud = -8.0 - 30.0 * ((age * 3.0 * std::f64::consts::TAU).sin() * 0.5 + 0.5);
+        let mut row = quiet.clone();
+        for (k, level) in row[centre - 30..centre + 30].iter_mut().enumerate() {
+            // Shaped rather than square, so the ridge has flanks for the light to find.
+            let across = (k as f64 / 59.0 - 0.5) * 2.0;
+            *level = f16::from_f64(loud + 60.0 * across * across);
+        }
         history.push(
             &queue,
             &RowIn {
@@ -1155,7 +1162,7 @@ fn the_landscape_stands_where_the_history_says() {
                 frames: i as u64 * 800,
                 floor_db: -96.0,
                 ceiling_db: -6.0,
-                a: &ridged,
+                a: &row,
                 b: &quiet,
             },
         );
@@ -1250,12 +1257,12 @@ fn the_landscape_stands_where_the_history_says() {
                 }
             }
         }
-        (best, lit)
+        (best, lit, pixels)
     };
 
     // Nothing is drawn before the pass is told where to look, so the cleared target has
     // to be the thing that changed.
-    let ((bright, x, y), lit) = render(Camera::of(CameraView::Classic), 0);
+    let ((bright, x, y), lit, shot) = render(Camera::of(CameraView::Classic), 0);
     assert!(bright > 150, "the ridge barely showed: {bright}");
     // The ground is lit too, so a good part of the picture is the surface rather than
     // the sky behind it.
@@ -1276,19 +1283,24 @@ fn the_landscape_stands_where_the_history_says() {
     );
 
     // The other channel is quiet everywhere, so it is ground and no ridge.
-    let ((quiet_peak, _, _), _) = render(Camera::of(CameraView::Classic), 1);
+    let ((quiet_peak, _, _), _, _) = render(Camera::of(CameraView::Classic), 1);
     assert!(
         quiet_peak * 3 < bright,
         "a silent channel drew a ridge: {quiet_peak} against {bright}"
     );
 
     // Swung round to the side, the ridge moves but the landscape is still there.
-    let ((side, side_x, _), side_lit) = render(Camera::of(CameraView::Side), 0);
+    let ((side, side_x, _), side_lit, _) = render(Camera::of(CameraView::Side), 0);
     assert!(side > 150 && side_lit > all / 10, "{side} {side_lit}");
     assert!(
         side_x.abs_diff(x) > WIDE as usize / 20,
         "turning the camera moved nothing: {x} to {side_x}"
     );
+
+    // And a picture of the first one, so a change to the mesh, the light or the fog that
+    // leaves the ridge where it is still has to be looked at rather than slipping
+    // through the checks above.
+    compare_to_golden("landscape", &adapter, software, (WIDE, TALL), &shot);
 }
 
 #[test]
@@ -1310,6 +1322,17 @@ fn the_scene_renders_as_it_did() {
     };
     assert!(distinct > 200, "the frame has only {distinct} colours");
 
+    compare_to_golden("scene", &adapter, software, (width, height), &pixels);
+}
+
+/// Checks a render against the golden for this renderer, or writes it out to be adopted
+/// when there isn't one yet. On a hardware GPU it says so and passes: the pixels are the
+/// driver's, and only a software renderer gives the same ones everywhere.
+fn compare_to_golden(what: &str, adapter: &str, software: bool, size: (u32, u32), pixels: &[u8]) {
+    if !software {
+        eprintln!("{adapter} is a hardware GPU: checked the frame, not its pixels");
+        return;
+    }
     let slug: String = adapter
         .to_lowercase()
         .chars()
@@ -1317,17 +1340,13 @@ fn the_scene_renders_as_it_did() {
         .collect();
     let golden = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/golden")
-        .join(format!("scene.{}.png", slug.trim_matches('-')));
-    if !software {
-        eprintln!("{adapter} is a hardware GPU: checked the frame, not its pixels");
-        return;
-    }
+        .join(format!("{what}.{}.png", slug.trim_matches('-')));
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{what}.png"));
     match read_png(&golden) {
-        Some((w, h, want)) if (w, h) == (width, height) => {
-            let (mean, worst) = difference(&pixels, &want);
+        Some((w, h, want)) if (w, h) == size => {
+            let (mean, worst) = difference(pixels, &want);
             if mean > MEAN_TOLERANCE || worst > MAX_TOLERANCE {
-                let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("scene.png");
-                let _ = write_png(&out, width, height, &pixels);
+                let _ = write_png(&out, size.0, size.1, pixels);
                 panic!(
                     "the render drifted from {}: mean {mean:.2}, worst {worst} (this one is in {})",
                     golden.display(),
@@ -1336,8 +1355,7 @@ fn the_scene_renders_as_it_did() {
             }
         }
         _ => {
-            let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("scene.png");
-            write_png(&out, width, height, &pixels).expect("writing the new picture");
+            write_png(&out, size.0, size.1, pixels).expect("writing the new picture");
             eprintln!(
                 "no golden for {adapter} yet; this render is in {}. Copy it to {} to adopt it.",
                 out.display(),
