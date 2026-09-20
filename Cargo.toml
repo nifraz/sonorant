@@ -51,7 +51,9 @@ criterion = { version = "0.5.1", default-features = false, features = ["cargo_be
 # The same major wgpu uses, so there's one copy.
 windows = "0.62.2"
 windows-core = "0.62.2"
-pipewire = "0.10.1"
+# v0_3_44 is what `keys::TARGET_OBJECT` sits behind, and the oldest feature that
+# carries it. PipeWire 0.3.44 is from February 2022; Ubuntu 24.04 ships 1.0.5.
+pipewire = { version = "0.10.1", features = ["v0_3_44"] }
 # Blocking API only, on the async-io reactor accesskit-unix already brings in.
 zbus = { version = "5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
 

@@ -10,6 +10,7 @@
 //! keeps moving.
 
 use std::cell::RefCell;
+use std::fmt;
 use std::rc::Rc;
 use std::sync::mpsc::Sender;
 use std::thread::{self, JoinHandle};
@@ -47,11 +48,21 @@ pub struct AudioApp {
 const QUIET: Duration = Duration::from_millis(40);
 const TICK: Duration = Duration::from_millis(10);
 
-#[derive(Debug)]
 pub struct PipeWireSource {
     target: Target,
     quit: Option<pw::channel::Sender<()>>,
     thread: Option<JoinHandle<()>>,
+}
+
+// `pw::channel::Sender` is not `Debug`, so the derive cannot see through it. What a
+// reader wants here is the target and whether the thread is up, not the channel.
+impl fmt::Debug for PipeWireSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PipeWireSource")
+            .field("target", &self.target)
+            .field("running", &self.thread.is_some())
+            .finish()
+    }
 }
 
 impl PipeWireSource {
@@ -237,8 +248,10 @@ fn run(
                     s.samples.clear();
                     s.samples.extend(
                         bytes[offset.min(end)..end]
-                            .chunks_exact(4)
-                            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])),
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .map(|b| f32::from_le_bytes(*b)),
                     );
                     to_stereo(&s.samples, s.channels, &mut s.stereo);
                     s.input.push_interleaved(&s.stereo);
