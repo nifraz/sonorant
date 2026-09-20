@@ -12,8 +12,16 @@ publish.workspace = true
 sonorant-core = { workspace = true }
 log = { workspace = true }
 
+[dev-dependencies]
+env_logger = { workspace = true }
+
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Media",
+    "Media_Control",
+    "Storage_Streams",
     "Win32_Foundation",
     "Win32_Media_Audio",
     "Win32_Media_KernelStreaming",

@@ -21,6 +21,26 @@ pub struct AudioApp {
     pub name: String,
 }
 
+/// The app behind a media session's app user model id, if it is playing something.
+///
+/// SMTC names a player by app id and never says which process it is, and process
+/// loopback capture needs a process. The two are matched by name, which is what those
+/// ids reduce to: `MusicBee.exe` and `SpotifyAB.SpotifyMusic_...!Spotify` both come
+/// down to the executable running behind them.
+///
+/// Only apps with a live audio session can be matched, which is the right restriction:
+/// a player making no sound is not one worth following.
+///
+/// `apps` is passed in rather than fetched here because enumerating sessions costs a
+/// round of COM, and a refresh matches every player against the same list.
+pub fn match_app_id<'a>(apps: &'a [AudioApp], app_id: &str) -> Option<&'a AudioApp> {
+    let want = super::smtc::display_name(app_id);
+    if want.is_empty() {
+        return None;
+    }
+    apps.iter().find(|a| a.name.eq_ignore_ascii_case(&want))
+}
+
 fn process_name(pid: u32) -> Option<String> {
     // SAFETY: a limited-information handle, closed before returning.
     unsafe {

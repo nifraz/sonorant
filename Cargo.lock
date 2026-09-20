@@ -1101,6 +1101,7 @@ name = "sonorant-platform"
 version = "0.1.0"
 dependencies = [
  "sonorant-core",
+ "env_logger",
  "log",
  "pipewire",
  "windows",
