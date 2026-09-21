@@ -98,11 +98,20 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
-    <release version="0.1.0" date="2026-09-21">
+    <release version="0.2.0" date="2026-09-21">
       <description>
-        <p>The first release of the rewrite: everything the Nostalgia+ plugin drew,
-        outside MusicBee and on the GPU, plus the phosphor scope, the zoomable long
-        history, the 3D waterfall and the beat-reactive backdrop.</p>
+        <p>The first release built for both systems: everything the Nostalgia+ plugin
+        drew, outside MusicBee and on the GPU, plus the phosphor scope, the zoomable
+        long history, the 3D waterfall and the beat-reactive backdrop.</p>
+        <p>Since the Windows preview: the picture is held back to line up with what you
+        hear, the frame rate drops while nothing is playing, the OpenGL fallback and
+        software rendering both work, and the right-click menu stays open while it is
+        used, with help rebuilt as a sheet of the settings.</p>
+      </description>
+    </release>
+    <release version="0.1.0" date="2026-09-20">
+      <description>
+        <p>A first Windows preview, before the app was packaged for anything.</p>
       </description>
     </release>
   </releases>
