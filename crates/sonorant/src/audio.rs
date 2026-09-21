@@ -299,3 +299,23 @@ impl AudioClock {
         out
     }
 }
+
+/// How old the newest analysed audio is at `now`: the pipeline's own delay.
+///
+/// Two parts, because the delay has two: what was still waiting to be analysed when
+/// the snapshot was published, and how long ago that was. `None` until the first
+/// snapshot has been published. A free function rather than a method because the
+/// snapshot is borrowed out of the [`Audio`] it would otherwise be called on.
+pub fn pipeline_age(s: &Snapshot, fallback_rate: f64, now: Instant) -> Option<Duration> {
+    let published = s.published?;
+    let rate = if s.sample_rate > 0.0 {
+        s.sample_rate
+    } else {
+        fallback_rate
+    };
+    if rate <= 0.0 {
+        return None;
+    }
+    let backlog = Duration::from_secs_f64(s.unread_frames as f64 / rate);
+    Some(now.saturating_duration_since(published) + backlog)
+}

@@ -26,6 +26,8 @@ use winit::window::{Fullscreen, Window, WindowId};
 use crate::audio::{Audio, Input};
 use crate::chrome::Chrome;
 use crate::gpu::Gpu;
+use crate::idle::{IDLE_INTERVAL, Idle};
+use crate::latency::Latency;
 use crate::nowplaying::NowPlaying;
 use crate::options::Options;
 use crate::pacing::FramePacing;
@@ -196,6 +198,19 @@ struct Running {
     appearance: Appearance,
     /// Holds the screen on while there is something to watch.
     awake: ScreenAwake,
+    /// How long there has been nothing to draw, and whether that is long enough to
+    /// draw it slowly.
+    idle: Idle,
+    /// What `idle` said on the last frame, which is what this one is paced by.
+    idling: bool,
+    /// How old the audio being drawn is, frame by frame.
+    latency: Latency,
+    /// What the status line last said, kept for the screen reader's description of the
+    /// picture.
+    reading: String,
+    /// How long egui says it can wait before it wants drawing again: zero while a menu
+    /// is animating, and as good as forever when nothing is.
+    egui_wait: Duration,
     /// Where the pointer is over the visuals, in points, or `None`.
     pointer: Option<egui::Pos2>,
     /// Whether the right-click menu is open, so the chrome doesn't fade under it.
@@ -448,6 +463,11 @@ impl App {
             config: AnalysisConfig::from_settings(&settings, columns),
             appearance,
             awake: ScreenAwake::new(),
+            idle: Idle::default(),
+            idling: false,
+            latency: Latency::default(),
+            reading: String::new(),
+            egui_wait: Duration::ZERO,
             pointer: None,
             menu_open: false,
             double_clicked: false,
@@ -468,6 +488,16 @@ impl App {
         let Some(r) = &self.running else { return };
         let overall = r.pacing.overall();
         log::info!("frame pacing: {overall}");
+        let latency = r.latency.overall();
+        if latency.readings > 0 {
+            // What the app is answerable for, and what it is not: the sound was
+            // already a graph cycle old when the system handed it over, and this
+            // frame reaches the photon a refresh or more after it is drawn.
+            log::info!(
+                "audio to drawn: {latency}, not counting the capture buffer before it \
+                 or the refresh after it"
+            );
+        }
         if r.timer.is_available() {
             log::info!(
                 "GPU time: {:.2} ms a frame at {}x{} ({})",
@@ -602,6 +632,12 @@ impl ApplicationHandler<UserEvent> for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let Some(r) = &mut self.running else { return };
         let response = r.egui_state.on_window_event(&r.window, &event);
+        // egui answers every event with "draw again", including the redraw it has just
+        // been handed. Asking for the next one there would ask for it at once, every
+        // time, and no cap or idle rate below would ever be reached: the frame the app
+        // draws for itself is scheduled where the frame is finished and nowhere else.
+        // What egui wants for its own animations is carried by `egui_wait` instead.
+        let asked_again = response.repaint && !matches!(event, WindowEvent::RedrawRequested);
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
@@ -649,49 +685,81 @@ impl ApplicationHandler<UserEvent> for App {
                     event_loop.exit();
                     return;
                 }
-                // Uncapped, the next frame is asked for at once and the swapchain
-                // paces it. Capped, it is due at a time, and `about_to_wait` sleeps
-                // until then rather than spinning.
-                match r.frame_interval() {
-                    None => {
-                        r.next_frame = None;
-                        r.window.request_redraw();
-                    }
-                    Some(interval) => r.next_frame = Some(Instant::now() + interval),
+                // When the next frame is due: the cap, or no wait at all when there
+                // is none, and never later than egui asked for. Uncapped with nothing
+                // animating that is at once, and the swapchain does the pacing;
+                // otherwise `about_to_wait` sleeps until then rather than spinning.
+                let wait = r
+                    .frame_interval()
+                    .unwrap_or(Duration::ZERO)
+                    .min(r.egui_wait);
+                if wait.is_zero() {
+                    r.next_frame = None;
+                    r.window.request_redraw();
+                } else {
+                    r.next_frame = Some(Instant::now() + wait);
                 }
             }
             _ => {}
         }
-        if response.repaint {
+        if asked_again {
             r.window.request_redraw();
         }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // A timed run ends on time whatever the window is doing. The deadline is
+        // otherwise noticed where frames are drawn, and a window nobody can see is
+        // asked for none: a Wayland compositor stops delivering frame callbacks to a
+        // window it isn't showing, and doesn't always say it is occluded either, so
+        // the loop would sit on a redraw request that never comes. The waits below are
+        // the other half of that: `Wait` has nothing to wake it, so a run with a
+        // deadline has to sleep until the deadline rather than until something happens.
+        let deadline = self
+            .options
+            .pacing_seconds
+            .map(|limit| self.started + Duration::from_secs_f64(limit));
+        if deadline.is_some_and(|at| Instant::now() >= at) {
+            event_loop.exit();
+            return;
+        }
         // Frames are driven by redraw requests; while the window is covered, look again
         // every so often in case the platform doesn't say when it's uncovered.
         let Some(r) = &mut self.running else {
-            event_loop.set_control_flow(ControlFlow::Wait);
+            event_loop.set_control_flow(wait_for(deadline));
             return;
         };
         if r.occluded {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + IDLE_LOOK));
+            event_loop.set_control_flow(wake_at(Instant::now() + IDLE_LOOK, deadline));
             return;
         }
         event_loop.set_control_flow(match r.next_frame {
-            None => ControlFlow::Wait,
+            None => wait_for(deadline),
             Some(due) if Instant::now() >= due => {
                 r.next_frame = None;
                 r.window.request_redraw();
-                ControlFlow::Wait
+                wait_for(deadline)
             }
-            Some(due) => ControlFlow::WaitUntil(due),
+            Some(due) => wake_at(due, deadline),
         });
     }
 
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         self.finish();
     }
+}
+
+/// Sleep until something happens, or until the deadline where there is one.
+fn wait_for(deadline: Option<Instant>) -> ControlFlow {
+    match deadline {
+        Some(at) => ControlFlow::WaitUntil(at),
+        None => ControlFlow::Wait,
+    }
+}
+
+/// Sleep until `due`, or until the deadline where that comes first.
+fn wake_at(due: Instant, deadline: Option<Instant>) -> ControlFlow {
+    ControlFlow::WaitUntil(deadline.map_or(due, |at| due.min(at)))
 }
 
 fn srgb_to_linear(c: u8) -> f64 {
@@ -730,7 +798,15 @@ impl Running {
             }
         };
         let now = Instant::now();
-        let since_last = self.pacing.record(now);
+        // A frame drawn on the idle clock is not a frame the display asked for, so it
+        // is no evidence about pacing either way: counting a quiet minute's 100 ms
+        // intervals would make it the worst stutter of the run.
+        let since_last = if self.idling {
+            self.pacing.break_sequence();
+            None
+        } else {
+            self.pacing.record(now)
+        };
         if let Some(interval) = since_last
             && interval >= STALL
         {
@@ -749,6 +825,7 @@ impl Running {
         // New rows and the newest analysis.
         let mut frames_now = 0.0;
         let mut rate = 48000.0;
+        let mut capturing = false;
         if let Some(audio) = &mut self.audio {
             audio.poll();
             let history = &mut self.history;
@@ -768,7 +845,11 @@ impl Running {
                 );
                 waves.push(r.wave);
             });
+            let fallback_rate = audio.sample_rate;
             let s = audio.latest(now);
+            if let Some(age) = crate::audio::pipeline_age(s, fallback_rate, now) {
+                self.latency.record(age);
+            }
             self.latest.clone_from(&s.panes);
             self.range = (s.floor_db, s.ceiling_db);
             self.analysis = s.analysis_seconds;
@@ -785,11 +866,16 @@ impl Running {
                 audio.sample_rate
             };
             frames_now = audio.frames_now(now);
+            capturing = matches!(
+                audio.status,
+                SourceStatus::Starting | SourceStatus::Running(_)
+            );
             self.status.capture = audio.status.to_string();
         } else {
             self.status.capture = "no capture".into();
         }
         self.settle_delay();
+        self.idling = self.idle.update(now, self.loudness.momentary, capturing);
         // Say whose sound this is when capture went looking for it: "MusicBee, 48 kHz"
         // alone doesn't tell you whether that was chosen or followed.
         if self.capture_follows
@@ -808,6 +894,7 @@ impl Running {
             && let Some(audio) = &self.audio
         {
             audio.reset_track();
+            self.idle.stir();
         }
         self.follow_capture();
 
@@ -815,6 +902,18 @@ impl Running {
             self.status_at = now;
             self.status.pacing = self.pacing.recent();
             self.status.presented = self.presented.counts();
+            // A window doesn't always know which monitor it is on at start-up: on
+            // Wayland the compositor says so afterwards, and until it has, the rate is
+            // unknown and nothing can be counted as missed. Asking again while it is
+            // unknown costs a pointer chase four times a second and turns the pacing
+            // figures from a guess into a count.
+            if self.status.pacing.refresh_hz.is_none()
+                && let Some(hz) =
+                    crate::present::compositor_refresh_hz().or_else(|| refresh_rate(&self.window))
+            {
+                log::info!("display: {hz:.2} Hz");
+                self.pacing.set_refresh_hz(Some(hz));
+            }
         }
 
         // The UI first, so the visuals know the space left to them.
@@ -833,6 +932,10 @@ impl Running {
             controls: self.now_playing.controls(),
             presentations: &presentations,
             reported_delay_ms: self.reported_delay_ms(),
+            // Last frame's, because this frame's is written once the layout is known
+            // and the UI is laid out first. A reading a sixtieth of a second old is
+            // not a reading anybody can tell from a fresh one.
+            reading: &self.reading,
         };
         let shell = &mut self.shell;
         let settings = &mut self.settings;
@@ -848,6 +951,12 @@ impl Running {
         for ask in self.shell.take_asks() {
             self.carry_out(&ask);
         }
+        // What egui wants next. Without this the cap could hold a menu's animation
+        // still, because nothing else in the frame knows egui is in the middle of one.
+        self.egui_wait = full_output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map_or(Duration::MAX, |v| v.repaint_delay);
         let mut textures = std::mem::take(&mut full_output.textures_delta);
         self.egui_state
             .handle_platform_output(&self.window, full_output.platform_output);
@@ -1062,12 +1171,15 @@ impl Running {
                 label_px,
             );
         }
+        // Built whether or not it is drawn: a screen reader is told the same reading
+        // the status line would show, and switching the line off is about the picture
+        // rather than about what the app is willing to say it is doing.
+        self.reading = self.status_line();
         if self.settings.show_status {
-            let status = self.status_line();
             deck::draw_status(
                 &mut self.overlay,
                 &drawn,
-                &status,
+                &self.reading,
                 chrome_top,
                 alpha,
                 label_px,
@@ -1567,14 +1679,27 @@ impl Running {
         if (self.view.zoom - 1.0).abs() > 0.01 {
             line += &format!("  |  zoom {:.2}x", self.view.zoom);
         }
-        // Only when there is one: a delay of nothing is the ordinary case, and saying
-        // "0 ms behind" every frame would be a figure that never means anything.
+        // The pipeline's own delay, and the offset that is held on purpose. Two
+        // different things that both answer "how late is this", so they are named
+        // rather than both being a number of milliseconds behind something.
+        let latency = self.latency.recent();
+        if latency.readings > 0 {
+            line += &format!("  |  lag {:.0} ms", latency.mean_ms);
+        }
+        if self.idling {
+            line += &format!(
+                "  |  idle {:.0} fps",
+                1.0 / IDLE_INTERVAL.as_secs_f64().max(f64::MIN_POSITIVE)
+            );
+        }
+        // Only when there is one: an offset of nothing is the ordinary case, and
+        // saying "delay 0 ms" every frame would be a figure that never means anything.
         if self.settings.visual_delay_ms > 0 {
             line += &format!(
-                "  |  {} ms behind{}",
+                "  |  delay {} ms{}",
                 self.settings.visual_delay_ms,
                 if self.settings.auto_visual_delay {
-                    ", automatic"
+                    " auto"
                 } else {
                     ""
                 }
@@ -2067,11 +2192,17 @@ impl Running {
     /// decides how often the screen is redrawn: it is a way to give a weak machine or a
     /// battery some room, not a way to change the picture.
     fn frame_interval(&self) -> Option<Duration> {
-        match self.settings.frame_cap {
+        let capped = match self.settings.frame_cap {
             FrameCap::Display => None,
             FrameCap::Fps60 => Some(Duration::from_nanos(1_000_000_000 / 60)),
             FrameCap::Fps30 => Some(Duration::from_nanos(1_000_000_000 / 30)),
+        };
+        // Nothing playing: the picture is a black scroll under resting meters, so it is
+        // redrawn slowly. Never faster than the cap, which is a ceiling and not a rate.
+        if self.idling {
+            return Some(IDLE_INTERVAL.max(capped.unwrap_or_default()));
         }
+        capped
     }
 
     /// How many screen pixels one history row is drawn across.

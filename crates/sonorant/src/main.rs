@@ -11,6 +11,8 @@ mod app;
 mod audio;
 mod chrome;
 mod gpu;
+mod idle;
+mod latency;
 mod nowplaying;
 mod options;
 mod pacing;

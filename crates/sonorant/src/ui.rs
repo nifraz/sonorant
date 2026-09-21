@@ -13,6 +13,33 @@ use sonorant_core::settings::{Settings, sanitise_name};
 use crate::pacing::PacingStats;
 use crate::present::PresentCounts;
 
+/// Tells a screen reader what the window is and what the picture is showing.
+///
+/// Everything else here is an egui widget and describes itself. The visuals are not:
+/// they are one region of pixels drawn by our own shaders, and what is useful to say
+/// about them is not a list of parts but the reading itself, which is what the status
+/// line already puts into words. It goes on as a description rather than a label so a
+/// reader says the name once and the figures when asked.
+///
+/// The window is named here too because egui builds the root node with no name of its
+/// own, so without this a reader announces an application with an untitled window.
+fn describe(ctx: &egui::Context, visuals: &egui::Response, reading: &str) {
+    use egui::accesskit::{Node, Role};
+    let named = |node: &mut Node, role, label: &str, description: &str| {
+        node.set_role(role);
+        node.set_label(label.to_owned());
+        if !description.is_empty() {
+            node.set_description(description.to_owned());
+        }
+    };
+    ctx.accesskit_node_builder(egui::accesskit_root_id(), |node| {
+        named(node, Role::Window, "Sonorant", "");
+    });
+    ctx.accesskit_node_builder(visuals.id, |node| {
+        named(node, Role::Image, "Analyser", reading);
+    });
+}
+
 /// A preset the app has to fetch, write or remove: the model can't reach the settings
 /// folder itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,6 +138,7 @@ impl Shell {
                 // a press of whatever button happens to be under the pointer.
                 area.clicked = response.clicked() && area.dragged.is_none();
                 area.menu_open = response.context_menu_opened();
+                describe(ui.ctx(), &response, what.reading);
                 response.context_menu(|ui| {
                     let items = menu::tree(&Context {
                         settings,
@@ -256,6 +284,9 @@ pub struct Around<'a> {
     /// What the system says the output path costs, in milliseconds, where it says
     /// anything: the figure the automatic visual delay follows.
     pub reported_delay_ms: Option<f64>,
+    /// What the status line last read, which is what a screen reader is told the
+    /// picture is showing.
+    pub reading: &'a str,
 }
 
 /// What the central panel left for the visuals, and what the pointer did in it.

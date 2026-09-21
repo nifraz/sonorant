@@ -13,7 +13,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use half::f16;
 
@@ -134,6 +134,20 @@ pub struct Snapshot {
     /// fell behind.
     pub dropped_frames: u64,
     pub dropped_rows: u64,
+    /// When this was published, for measuring how old what is drawn is.
+    ///
+    /// `None` only on the state nothing has been published into yet, which is what a
+    /// renderer sees for its first frame or two.
+    pub published: Option<Instant>,
+    /// Frames of captured audio that were still unread when this was published.
+    ///
+    /// The other half of the latency measurement. Comparing the analysis's frame count
+    /// with the capture's would be the obvious way to get this and does not survive
+    /// contact with the two moments those counters restart, so the backlog is measured
+    /// where both are known at once: in the analysis thread, against the ring itself.
+    /// It counts the visual delay's hold too, which belongs in the figure, because the
+    /// whole point of the hold is to make the picture later.
+    pub unread_frames: u64,
 }
 
 /// Commands for the analysis thread.
@@ -187,6 +201,7 @@ impl Analysis {
             .spawn(move || {
                 let engine = Engine::new(sample_rate, hop_rate, config);
                 let sink = Publisher {
+                    unread: 0,
                     rows: rows_tx,
                     latest: latest_tx,
                     row: Box::new(RowMsg::empty()),
@@ -278,11 +293,18 @@ fn run(
                 Command::Stop => return,
             }
         }
-        let available = take_now(audio.slots(), delay, engine.sample_rate());
+        let waiting = audio.slots();
+        let available = take_now(waiting, delay, engine.sample_rate());
         if available == 0 {
             thread::sleep(IDLE_SLEEP);
             continue;
         }
+        // What stays behind once this chunk is taken: the visual delay's hold, and an
+        // odd sample where the count was not a whole frame. Every hop in the chunk
+        // publishes this, which is exact for the last of them and an underestimate for
+        // the rest; the last is the one a renderer sees, and in a steady stream a chunk
+        // is a millisecond or two of audio anyway.
+        sink.unread = ((waiting - available) / 2) as u64;
         let Ok(chunk) = audio.read_chunk(available) else {
             continue;
         };
@@ -314,6 +336,8 @@ fn take_now(waiting: usize, delay: f64, rate: f64) -> usize {
 }
 
 struct Publisher {
+    /// Frames left in the ring when the chunk being analysed was taken from it.
+    unread: u64,
     rows: rtrb::Producer<RowMsg>,
     latest: triple_buffer::Input<Snapshot>,
     row: Box<RowMsg>,
@@ -367,6 +391,8 @@ impl Sink for Publisher {
         s.rows = self.rows_sent;
         s.dropped_rows = self.dropped_rows;
         s.dropped_frames = self.dropped_frames.load(Ordering::Relaxed);
+        s.published = Some(Instant::now());
+        s.unread_frames = self.unread;
         self.latest.publish();
     }
 
