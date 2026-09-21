@@ -1,0 +1,32 @@
+# What winget shows in `winget show` and in the store listing.
+PackageIdentifier: Nifraz.Sonorant
+PackageVersion: __VERSION__
+PackageLocale: en-US
+Publisher: Nifraz
+PublisherUrl: https://github.com/nifraz
+PublisherSupportUrl: https://github.com/nifraz/sonorant/issues
+PackageName: Sonorant
+PackageUrl: https://github.com/nifraz/sonorant
+License: GPL-3.0-or-later
+LicenseUrl: https://github.com/nifraz/sonorant/blob/main/LICENSE
+ShortDescription: Real-time spectrogram, spectrum and loudness visualiser
+Description: |-
+  Sonorant draws what the computer is playing: a scrolling spectrogram of both
+  channels, the spectrum beside it, and broadcast loudness, true peak, dynamic range,
+  tempo and brightness underneath. It captures the whole system or one app through
+  WASAPI loopback, and follows whatever player is running through the system media
+  transport controls.
+
+  It is the standalone rewrite of the Nostalgia+ plugin for MusicBee, drawn on the GPU
+  with its own shaders.
+Moniker: sonorant
+Tags:
+  - spectrogram
+  - spectrum
+  - audio
+  - loudness
+  - lufs
+  - visualiser
+ReleaseNotesUrl: https://github.com/nifraz/sonorant/releases/tag/v__VERSION__
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

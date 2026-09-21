@@ -1,0 +1,21 @@
+# The installer manifest. There is no installer: the download is a zip holding the
+# program, so winget unpacks it and puts `sonorant` on the path itself.
+#
+# `__VERSION__` and `__SHA256__` are replaced by the release workflow; the checksum is
+# the one `packaging/windows/build.ps1` prints beside the zip.
+PackageIdentifier: Nifraz.Sonorant
+PackageVersion: __VERSION__
+MinimumOSVersion: 10.0.19041.0
+InstallModes:
+  - silent
+Installers:
+  - Architecture: x64
+    InstallerType: zip
+    NestedInstallerType: portable
+    NestedInstallerFiles:
+      - RelativeFilePath: sonorant.exe
+        PortableCommandAlias: sonorant
+    InstallerUrl: https://github.com/nifraz/sonorant/releases/download/v__VERSION__/sonorant-__VERSION__-windows-x64.zip
+    InstallerSha256: __SHA256__
+ManifestType: installer
+ManifestVersion: 1.6.0
