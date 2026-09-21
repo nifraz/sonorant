@@ -17,8 +17,8 @@ Phase 7 lines the picture up with the speakers, drops the frame rate when nothin
 playing, and has been measured on an Iris Xe, on OpenGL and on a software renderer.
 Phase 8 gives it an icon, a desktop entry, a Flatpak manifest, `.deb` packages, a
 Windows zip and a release workflow a tag sets off: see [packaging](packaging/README.md).
-**Nothing has been released yet**, so there is no download; build it from source as
-below. What each phase still leaves open is in
+**[0.2.0 is out](https://github.com/nifraz/sonorant/releases/latest)**: `.deb` packages
+for x86-64 and arm64, and a zip for Windows. What each phase still leaves open is in
 [Progress](docs/plan.md#progress) in the plan.
 
 ![Both channels scrolling, with the spectrum beside each pane](packaging/screenshots/main.png)
@@ -34,6 +34,16 @@ signal, a chord over a kick and hat with a 200 Hz to 9 kHz sweep across it.*
 | `sonorant-platform` | Windows: WASAPI loopback of the whole system or one app, and now playing from SMTC. Linux: PipeWire capture, now playing from MPRIS, which has been seen following a real player, and the sink's own latency, which the visual delay follows |
 | `sonorant-render` | The whole picture: the pane and deck layouts, the GPU history store, the spectrogram, the curve strips, a text and shape overlay (IBM Plex, bundled) carrying the grid, scales and labels, the waveform lanes, goniometer, meters and readouts, the colour bar and status line, the floating-point target and its glow, GPU pass timing, and golden renders. The new visuals too: the phosphor screen, the beat-reactive backdrop and the 3D waterfall |
 | `sonorant` | The app: the window and the frame loop, the menu and the keyboard over one model, the searchable help, the hover readout, the quick bar and the transport, and the wheel and drag that walk back through the history or orbit the waterfall. Also the tuning: the visual delay, the end-to-end latency figure, the frame cap and the idle rate; `sonorant capture` runs the pipeline without a window |
+
+## Installing
+
+```sh
+sudo apt install ./sonorant_0.2.0_amd64.deb      # Ubuntu 24.04 or later
+```
+
+On Windows, unpack the zip and run `sonorant.exe`. It is unsigned, so SmartScreen will
+ask first. Both downloads, and a `SHA256SUMS` for them, are on the
+[releases page](https://github.com/nifraz/sonorant/releases/latest).
 
 ## Building
 

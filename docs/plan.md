@@ -75,10 +75,11 @@ on. Measuring it turned up two older bugs, one of which is that the frame cap ha
 capped. Phase 8 is written too: the app has an icon and tells the desktop who it is,
 and there is a `.desktop` entry, an AppStream description, a Flatpak manifest, `.deb`
 packages, a Windows zip, winget manifests and a release workflow that a tag sets off.
-Nothing has been released yet, and no Flatpak has been built anywhere. Phase 8 also had
-two calls to make and made both: the CPU target moved, because as written it
-contradicted the analysis target, and the time-axis mip chain is not being built as the
-plan described it. What is left is at [Next](#next).
+**0.2.0 is out**, built by that workflow on its first run: `.deb` packages for x86-64
+and arm64 and a Windows zip, published from the tag. No Flatpak has been built
+anywhere. Phase 8 also had two calls to make and made both: the CPU target moved,
+because as written it contradicted the analysis target, and the time-axis mip chain is
+not being built as the plan described it. What is left is at [Next](#next).
 
 **Phase 0 (repository, CI, skeleton): done, except clean frame pacing and CI**
 
@@ -607,10 +608,21 @@ being asked to do something it does badly.
   gets tried without spending a tag.
 - [x] **Snap stays skipped**, as decided: its `audio-record` permission isn't connected
   automatically, so capture wouldn't work out of the box.
-- [ ] **Nothing has been released.** No tag has been pushed, so the workflow has never
-  run, and the three things only it can prove are unproven: the Windows zip script has
-  never been run at all (there is no Windows machine here), the arm64 package has never
-  been built, and the stamping has only been tried locally.
+- [x] **0.2.0 is released**, and the workflow worked first time. `v0.2.0` built the two
+  `.deb` packages and the Windows zip, checked each one's binary reported the version
+  the tag asked for, and published the four files with a `SHA256SUMS`. That settles the
+  three things only a real run could: the Windows zip had never been built by anything
+  (there is no Windows machine here), nor had the arm64 package, and the version
+  stamping had only been tried locally. `0.1.0` stays as it was, a prerelease marked
+  "first Windows preview".
+- [ ] **CI is not green yet, and the first run to reach the runners said why.** Both
+  Linux runners and the packaging job pass. Windows failed clippy on a constant that
+  only the Linux branch reads, fixed by cross-checking the Windows target from Linux
+  (`clippy --target x86_64-pc-windows-gnu` reproduces it in forty seconds, because
+  clippy checks without linking; worth doing before pushing platform code). The Windows
+  test step has still never run, because clippy failed before it. `cargo-deny` fails
+  and has not been looked at: it wants either an advisory or a licence that the
+  allow-list doesn't cover, and nothing here has run it.
 - [ ] **No Flatpak has been built.** There is no flatpak-builder on this machine. The
   manifest and the crate list are checked as far as they can be, which is the list
   against Cargo.lock; nobody has watched it build, and the Flathub submission is a
@@ -647,11 +659,9 @@ being asked to do something it does badly.
 
 ### Next
 
-**Release the first version.** Every phase is written. What stands between here and
-`v0.1.0` is a tag: pushing one builds the packages, checks each reports the version the
-tag asked for, and publishes them. It has never run, so expect the first attempt to be
-the one that finds whatever is wrong with it, and run it by hand from the Actions tab
-first, which builds and checks everything and stops before publishing.
+**Get CI green.** The release is out and the build that makes it works; what is still
+red is the checking. `cargo-deny` is the one nobody has run, and the Windows test step
+has never been reached. Both want a look before the next tag rather than after it.
 
 **Then the two submissions**, in whichever order suits: the Flathub pull request, which
 wants a Flatpak built and watched at least once locally first, and the winget one,
