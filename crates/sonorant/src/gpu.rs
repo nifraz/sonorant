@@ -16,6 +16,12 @@ pub struct Gpu {
     /// in linear light and the hardware encodes.
     pub view_format: wgpu::TextureFormat,
     pub present_modes: Vec<wgpu::PresentMode>,
+    /// `--render-size` fixed how many pixels are drawn, so the window's size no longer
+    /// decides it.
+    pinned: bool,
+    /// Whether a finished frame can be read back, which a screenshot needs. Some
+    /// backends won't let the swapchain be copied from; OpenGL here is one.
+    pub readable: bool,
 }
 
 /// Preferred backends, best first: Direct3D 12 on Windows and Vulkan elsewhere, with
@@ -80,7 +86,14 @@ impl Gpu {
         window: Arc<Window>,
         options: &Options,
     ) -> Result<Gpu, String> {
-        let size = window.inner_size();
+        // `--render-size` draws a size of its own whatever the window is, so a frame
+        // budget can be measured at 1440p on a screen that hasn't got it. The
+        // compositor scales what it is handed to fit; the work the GPU does is the
+        // work the bigger screen would ask for, which is what is being measured.
+        let size = match options.render_size {
+            Some((width, height)) => winit::dpi::PhysicalSize { width, height },
+            None => window.inner_size(),
+        };
         let surface = instance
             .create_surface(window)
             .map_err(|e| format!("cannot create a surface for the window: {e}"))?;
@@ -119,16 +132,33 @@ impl Gpu {
         .map_err(|e| format!("cannot open the GPU: {e}"))?;
 
         let caps = surface.get_capabilities(&adapter);
+        // Not every backend lets a swapchain be viewed as another format. OpenGL is the
+        // one that matters here: it is the only way to reach an Intel GPU too old for
+        // Vulkan or Direct3D 12, and asking it for a view format is not a warning but a
+        // validation error that takes the program with it. Confirmed on Mesa 26 and on
+        // the reference PC's HD 4400, which is what the plan's weak-GPU item was about.
+        let views = adapter
+            .get_downlevel_capabilities()
+            .flags
+            .contains(wgpu::DownlevelFlags::SURFACE_VIEW_FORMATS);
+        log::debug!("surface formats: {:?}; view formats {views}", caps.formats);
         // A plain 8-bit swapchain with an sRGB view: the visuals render through the view,
         // egui draws to the swapchain directly as it expects.
-        let plain = caps.formats.iter().copied().find(|f| {
-            matches!(
-                f,
-                wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm
-            )
-        });
+        let plain = views
+            .then(|| {
+                caps.formats.iter().copied().find(|f| {
+                    matches!(
+                        f,
+                        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm
+                    )
+                })
+            })
+            .flatten();
         let (format, view_format) = match plain {
             Some(f) => (f, f.add_srgb_suffix()),
+            // No view to render through, so the swapchain itself has to be the sRGB
+            // one: the hardware still encodes, and egui is told the same format either
+            // way, which is all it asks of this.
             None => {
                 let f = caps
                     .formats
@@ -178,8 +208,16 @@ impl Gpu {
         };
         surface.configure(&device, &config);
         log::info!(
-            "surface: {format:?} viewed as {view_format:?}, {present_mode:?}, frame latency {}",
-            options.frame_latency
+            "surface: {}x{} {format:?} viewed as {view_format:?}, {present_mode:?}, frame \
+             latency {}{}",
+            config.width,
+            config.height,
+            options.frame_latency,
+            if options.render_size.is_some() {
+                ", size pinned"
+            } else {
+                ""
+            }
         );
 
         Ok(Gpu {
@@ -189,11 +227,15 @@ impl Gpu {
             config,
             view_format,
             present_modes: caps.present_modes,
+            pinned: options.render_size.is_some(),
+            readable: !copy.is_empty(),
         })
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
-        if width == 0 || height == 0 {
+        // Pinned by `--render-size`: the point of it is that the window's size stops
+        // deciding how many pixels are drawn, so a resize changes nothing.
+        if self.pinned || width == 0 || height == 0 {
             return; // minimised
         }
         self.config.width = width;

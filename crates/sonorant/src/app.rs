@@ -1356,12 +1356,24 @@ impl Running {
             self.egui_renderer.render(&mut pass, &paint_jobs, &screen);
         }
         self.timer.resolve(&mut encoder);
+        // A backend that won't let its swapchain be copied from can still draw; it
+        // just can't be photographed. Saying so once and carrying on beats taking the
+        // program down over a diagnostic.
         let shot = match &self.screenshot {
-            Some((_, after)) if self.started.elapsed() >= *after => Some(Readback::record(
-                &self.gpu.device,
-                &mut encoder,
-                &frame.texture,
-            )),
+            Some((_, after)) if self.started.elapsed() >= *after => {
+                if self.gpu.readable {
+                    Some(Readback::record(
+                        &self.gpu.device,
+                        &mut encoder,
+                        &frame.texture,
+                    ))
+                } else {
+                    log::error!("this backend won't let a finished frame be read back");
+                    self.screenshot = None;
+                    self.shell.session.quit = true;
+                    None
+                }
+            }
             _ => None,
         };
         self.gpu

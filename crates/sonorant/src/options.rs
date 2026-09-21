@@ -19,6 +19,8 @@ Options:
   --pacing-log <file>     write every frame interval to a CSV file on exit
   --screenshot <file>     save the window's picture as a PNG after a few seconds, exit
   --screenshot-seconds <s>  how long to wait before the screenshot (default 5)
+  --render-size <w>x<h>   draw this many pixels whatever the window is, for measuring
+                          the frame budget at a size this screen hasn't got
   -h, --help              show this help
   -V, --version           show the version";
 
@@ -35,6 +37,9 @@ pub struct Options {
     pub pacing_log: Option<PathBuf>,
     pub screenshot: Option<PathBuf>,
     pub screenshot_seconds: f64,
+    /// Pixels to draw, whatever size the window is. For measurement only: the
+    /// compositor scales what it is given to fit the window.
+    pub render_size: Option<(u32, u32)>,
     pub help: bool,
     pub version: bool,
 }
@@ -102,6 +107,10 @@ impl Options {
                         }
                     };
                 }
+                "--render-size" => {
+                    let v = value("--render-size")?;
+                    o.render_size = Some(parse_size(&v)?);
+                }
                 "-h" | "--help" => o.help = true,
                 "-V" | "--version" => o.version = true,
                 other => return Err(format!("unknown option {other}")),
@@ -109,6 +118,24 @@ impl Options {
         }
         Ok(o)
     }
+}
+
+/// Reads `2560x1440`, and says what it wanted when it isn't that.
+fn parse_size(text: &str) -> Result<(u32, u32), String> {
+    let bad = || format!("--render-size takes <width>x<height>, not {text}");
+    let (w, h) = text.split_once(['x', 'X']).ok_or_else(bad)?;
+    let (w, h) = (
+        w.trim().parse::<u32>().map_err(|_| bad())?,
+        h.trim().parse::<u32>().map_err(|_| bad())?,
+    );
+    // The lower end is a size a pane can still be laid out in; the upper is past any
+    // display anyone will time this against.
+    if !(64..=16384).contains(&w) || !(64..=16384).contains(&h) {
+        return Err(format!(
+            "--render-size takes 64 to 16384 pixels, not {text}"
+        ));
+    }
+    Ok((w, h))
 }
 
 #[cfg(test)]
@@ -141,6 +168,24 @@ mod tests {
         assert_eq!(o.present_mode, Some(wgpu::PresentMode::Mailbox));
         assert_eq!(o.pacing_seconds, Some(30.0));
         assert_eq!(o.backends, Some(wgpu::Backends::DX12));
+    }
+
+    #[test]
+    fn a_render_size_is_two_numbers_with_an_x_between_them() {
+        assert_eq!(
+            parse(&["--render-size", "2560x1440"]).unwrap().render_size,
+            Some((2560, 1440))
+        );
+        assert_eq!(
+            parse(&["--render-size", "800X600"]).unwrap().render_size,
+            Some((800, 600))
+        );
+        for bad in ["2560", "2560*1440", "axb", "2560x", "1x1", "99999x99999"] {
+            assert!(
+                parse(&["--render-size", bad]).is_err(),
+                "{bad} was accepted"
+            );
+        }
     }
 
     #[test]

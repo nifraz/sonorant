@@ -341,9 +341,16 @@ impl ArtworkPass {
 
     /// Uploads a decoded picture, making the deck's copy and the backdrop's.
     ///
-    /// The deck's is viewed in the swapchain's own encoding, because the furniture
-    /// writes sRGB-encoded values straight out; the backdrop's is viewed as sRGB so the
+    /// The deck's is kept in the swapchain's own encoding, because the furniture writes
+    /// sRGB-encoded values straight out; the backdrop's is an sRGB texture so the
     /// hardware converts it to the linear light the visuals target works in.
+    ///
+    /// Two textures rather than one texture with two views, although the bytes are the
+    /// same both times. A view in another format is something a downlevel device may
+    /// not have, and OpenGL here is exactly that device: it is the only way to reach an
+    /// Intel GPU too old for Vulkan, and asking it for one is a validation error rather
+    /// than a warning. Declaring the format on the texture costs a second copy of a
+    /// cover thumbnail and works everywhere.
     pub fn upload(&self, device: &wgpu::Device, queue: &wgpu::Queue, picture: &Picture) -> Artwork {
         let small = reduce(picture, BACKDROP_SIZE, BACKDROP_SIZE);
         Artwork {
@@ -357,7 +364,7 @@ impl ArtworkPass {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         picture: &Picture,
-        view_format: wgpu::TextureFormat,
+        format: wgpu::TextureFormat,
     ) -> Bound {
         let size = wgpu::Extent3d {
             width: picture.width.max(1),
@@ -370,9 +377,9 @@ impl ArtworkPass {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[view_format],
+            view_formats: &[],
         });
         queue.write_texture(
             texture.as_image_copy(),
@@ -384,10 +391,7 @@ impl ArtworkPass {
             },
             size,
         );
-        let view = texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(view_format),
-            ..Default::default()
-        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("artwork"),
             layout: &self.layout,
