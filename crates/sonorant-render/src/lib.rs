@@ -10,6 +10,7 @@ pub mod curves;
 pub mod deck;
 pub mod history;
 pub mod hover;
+pub mod icon;
 pub mod layout;
 pub mod overlay;
 pub mod phosphor;

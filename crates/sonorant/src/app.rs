@@ -41,6 +41,15 @@ use sonorant_platform::linux::{Appearance, ScreenAwake, appearance};
 #[cfg(windows)]
 use sonorant_platform::windows::{Appearance, ScreenAwake, appearance};
 
+/// What the app calls itself to the desktop: the Wayland app id, the X11 window class,
+/// the `.desktop` file's name and the Flatpak id, which all have to be the same string
+/// for a compositor to pair the window with its icon and its entry.
+const APP_ID: &str = "io.github.nifraz.Sonorant";
+/// The pixels a side of the icon handed to the window. X11 and Windows scale this to
+/// whatever the title bar and the switcher want; Wayland ignores it and takes the icon
+/// from the `.desktop` file [`APP_ID`] names.
+const WINDOW_ICON: u32 = 64;
+
 /// How often the status line's numbers change, so they can be read.
 const STATUS_EVERY: Duration = Duration::from_millis(250);
 /// The colour bar's column down the right edge, in pixels.
@@ -271,10 +280,26 @@ impl App {
 
         let mut attributes = Window::default_attributes()
             .with_title("Sonorant")
+            .with_window_icon(
+                winit::window::Icon::from_rgba(
+                    sonorant_render::icon::rgba(WINDOW_ICON),
+                    WINDOW_ICON,
+                    WINDOW_ICON,
+                )
+                .ok(),
+            )
             .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0))
             .with_min_inner_size(winit::dpi::LogicalSize::new(320.0, 200.0))
             // AccessKit has to be attached before the window is first shown.
             .with_visible(false);
+        // Both take the same pair, so the call has to say which trait it means.
+        #[cfg(target_os = "linux")]
+        {
+            use winit::platform::wayland::WindowAttributesExtWayland;
+            use winit::platform::x11::WindowAttributesExtX11;
+            attributes = WindowAttributesExtWayland::with_name(attributes, APP_ID, "");
+            attributes = WindowAttributesExtX11::with_name(attributes, APP_ID, "sonorant");
+        }
         if self.options.fullscreen {
             attributes = attributes.with_fullscreen(Some(Fullscreen::Borderless(None)));
         }

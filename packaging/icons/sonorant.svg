@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>Sonorant</title>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b1236"/>
+      <stop offset="1" stop-color="#07050f"/>
+    </linearGradient>
+    <linearGradient id="bars" gradientUnits="userSpaceOnUse" x1="0" y1="409.60" x2="0" y2="92.16">
+      <stop offset="0.000" stop-color="#55157c"/>
+      <stop offset="0.125" stop-color="#701f80"/>
+      <stop offset="0.250" stop-color="#8d2a81"/>
+      <stop offset="0.375" stop-color="#aa337c"/>
+      <stop offset="0.500" stop-color="#c63e72"/>
+      <stop offset="0.625" stop-color="#e25061"/>
+      <stop offset="0.750" stop-color="#f57056"/>
+      <stop offset="0.875" stop-color="#fda06b"/>
+      <stop offset="1.000" stop-color="#fcfdbf"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="512" height="512" rx="114.53" fill="url(#tile)"/>
+  <path fill="url(#bars)" d="M87.04 409.60V301.12A24.85 24.85 0 0 1 111.89 276.28H111.89A24.85 24.85 0 0 1 136.73 301.12V409.60Z"/>
+  <path fill="url(#bars)" d="M159.10 409.60V186.84A24.85 24.85 0 0 1 183.94 162.00H183.94A24.85 24.85 0 0 1 208.79 186.84V409.60Z"/>
+  <path fill="url(#bars)" d="M231.15 409.60V117.01A24.85 24.85 0 0 1 256.00 92.16H256.00A24.85 24.85 0 0 1 280.85 117.01V409.60Z"/>
+  <path fill="url(#bars)" d="M303.21 409.60V250.33A24.85 24.85 0 0 1 328.06 225.48H328.06A24.85 24.85 0 0 1 352.90 250.33V409.60Z"/>
+  <path fill="url(#bars)" d="M375.27 409.60V339.22A24.85 24.85 0 0 1 400.11 314.37H400.11A24.85 24.85 0 0 1 424.96 339.22V409.60Z"/>
+</svg>

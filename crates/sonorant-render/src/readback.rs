@@ -94,15 +94,20 @@ impl Readback {
 
 /// Writes RGBA rows to `path` as an 8-bit PNG.
 pub fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
-    let file = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+    let bytes = encode_png(width, height, rgba).map_err(|e| format!("{}: {e}", path.display()))?;
+    std::fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// The same PNG as a block of bytes, for callers with somewhere else to put it: the
+/// icon packs several of these into a Windows `.ico` without any of them being a file.
+pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    let mut encoder = png::Encoder::new(&mut bytes, width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
-    let mut writer = encoder
-        .write_header()
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    writer
-        .write_image_data(rgba)
-        .map_err(|e| format!("{}: {e}", path.display()))
+    let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
+    writer.write_image_data(rgba).map_err(|e| e.to_string())?;
+    writer.finish().map_err(|e| e.to_string())?;
+    Ok(bytes)
 }
