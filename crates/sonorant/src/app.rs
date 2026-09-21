@@ -44,6 +44,10 @@ use sonorant_platform::windows::{Appearance, ScreenAwake, appearance};
 /// What the app calls itself to the desktop: the Wayland app id, the X11 window class,
 /// the `.desktop` file's name and the Flatpak id, which all have to be the same string
 /// for a compositor to pair the window with its icon and its entry.
+///
+/// Linux alone, because nothing on Windows reads it: there a window is known by its
+/// own icon and title, and a constant nothing uses is dead code that CI fails on.
+#[cfg(target_os = "linux")]
 const APP_ID: &str = "io.github.nifraz.Sonorant";
 /// The pixels a side of the icon handed to the window. X11 and Windows scale this to
 /// whatever the title bar and the switcher want; Wayland ignores it and takes the icon
