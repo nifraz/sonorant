@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=Sonorant
+GenericName=Audio visualiser
+Comment=A real-time spectrogram, spectrum and loudness visualiser for whatever is playing
+Exec=sonorant
+Icon=io.github.nifraz.Sonorant
+Terminal=false
+Categories=AudioVideo;Audio;Music;
+Keywords=spectrogram;spectrum;analyser;analyzer;visualiser;visualizer;loudness;LUFS;FFT;waterfall;
+StartupNotify=true
+StartupWMClass=io.github.nifraz.Sonorant
+Actions=Fullscreen;
+
+[Desktop Action Fullscreen]
+Name=Open fullscreen
+Exec=sonorant --fullscreen

@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The AppStream description GNOME Software, KDE Discover and Flathub read. -->
+<component type="desktop-application">
+  <id>io.github.nifraz.Sonorant</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>Sonorant</name>
+  <summary>Watch what you are listening to</summary>
+  <developer id="io.github.nifraz">
+    <name>Nifraz</name>
+  </developer>
+
+  <description>
+    <p>
+      Sonorant draws what the computer is playing: a scrolling spectrogram of both
+      channels, the spectrum beside it, and broadcast loudness, true peak, dynamic
+      range, tempo and brightness underneath. It follows whatever player is running
+      rather than living inside one, and it can listen to the whole system or to a
+      single app.
+    </p>
+    <p>
+      The picture is drawn on the GPU at the display's refresh rate while the
+      spectrogram scrolls by audio time, so it moves at the same speed on a 60 Hz panel
+      as on a 240 Hz one.
+    </p>
+    <p>What it shows:</p>
+    <ul>
+      <li>A spectrogram on a note, log or linear frequency axis, in seven palettes</li>
+      <li>Peak, average and minimum spectra, as a line, bars or LED segments</li>
+      <li>LUFS momentary, short-term and integrated, loudness range, true peak, crest
+          and overs, to BS.1770</li>
+      <li>A goniometer, correlation and balance, and waveform lanes</li>
+      <li>A 3D waterfall you can orbit, and a long history you can zoom and walk back
+          through</li>
+      <li>A phosphor scope and a beat-reactive backdrop for when it is left running</li>
+      <li>The title, artwork and transport of whatever is playing, over MPRIS</li>
+    </ul>
+    <p>
+      Point at the picture to read the frequency under the pointer as hertz and as a
+      note with its deviation in cents, each channel's level there, and how far back in
+      time the column is. Double-click a column to send the player to that moment.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.nifraz.Sonorant.desktop</launchable>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Both channels scrolling, with the spectrum beside each pane</caption>
+      <image>https://raw.githubusercontent.com/nifraz/sonorant/main/packaging/screenshots/main.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Immersive mode, with the panes mirrored and the chrome faded away</caption>
+      <image>https://raw.githubusercontent.com/nifraz/sonorant/main/packaging/screenshots/mirrored.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The last few seconds as a landscape you can orbit</caption>
+      <image>https://raw.githubusercontent.com/nifraz/sonorant/main/packaging/screenshots/waterfall.png</image>
+    </screenshot>
+  </screenshots>
+
+  <url type="homepage">https://github.com/nifraz/sonorant</url>
+  <url type="bugtracker">https://github.com/nifraz/sonorant/issues</url>
+  <url type="vcs-browser">https://github.com/nifraz/sonorant</url>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+  </categories>
+
+  <keywords>
+    <keyword>spectrogram</keyword>
+    <keyword>spectrum</keyword>
+    <keyword>analyser</keyword>
+    <keyword>loudness</keyword>
+    <keyword>LUFS</keyword>
+    <keyword>FFT</keyword>
+    <keyword>waterfall</keyword>
+  </keywords>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <!-- It draws two panes side by side and a deck under them; a phone-width window is
+       not what it is for. -->
+  <recommends>
+    <display_length compare="ge">768</display_length>
+  </recommends>
+
+  <!-- Two colours out of Magma, the default palette, as the icon uses. -->
+  <branding>
+    <color type="primary" scheme_preference="light">#e1a1b0</color>
+    <color type="primary" scheme_preference="dark">#1b1236</color>
+  </branding>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.1.0" date="2026-09-21">
+      <description>
+        <p>The first release of the rewrite: everything the Nostalgia+ plugin drew,
+        outside MusicBee and on the GPU, plus the phosphor scope, the zoomable long
+        history, the 3D waterfall and the beat-reactive backdrop.</p>
+      </description>
+    </release>
+  </releases>
+</component>
