@@ -9,13 +9,23 @@ plan, with every decision and phase, is in [docs/plan.md](docs/plan.md).
 
 ## Status
 
-Early work: Phases 0 to 7 are written, so the app captures, analyses and draws the parity
-views, follows whatever is playing, runs off its own menu, and has the five visuals that
-are new here: the phosphor scope, the zoomable long history, the beat-reactive backdrop,
-the 3D waterfall and the quality setting that scales them. Phase 7 lines the picture up
-with the speakers, drops the frame rate when nothing is playing, and has been measured on
-an Iris Xe, on OpenGL and on a software renderer. Phase 8, packaging and release, is next.
-What each phase still leaves open is in [Progress](docs/plan.md#progress) in the plan.
+Early work, but every phase is now written: the app captures, analyses and draws the
+parity views, follows whatever is playing, runs off its own menu, and has the five
+visuals that are new here: the phosphor scope, the zoomable long history, the
+beat-reactive backdrop, the 3D waterfall and the quality setting that scales them.
+Phase 7 lines the picture up with the speakers, drops the frame rate when nothing is
+playing, and has been measured on an Iris Xe, on OpenGL and on a software renderer.
+Phase 8 gives it an icon, a desktop entry, a Flatpak manifest, `.deb` packages, a
+Windows zip and a release workflow a tag sets off: see [packaging](packaging/README.md).
+**Nothing has been released yet**, so there is no download; build it from source as
+below. What each phase still leaves open is in
+[Progress](docs/plan.md#progress) in the plan.
+
+![Both channels scrolling, with the spectrum beside each pane](packaging/screenshots/main.png)
+
+*The default view: a note-scale spectrogram of each channel, its spectrum in the gutter
+beside it, the waveform lanes below and the deck between them. The picture is a reference
+signal, a chord over a kick and hat with a 200 Hz to 9 kHz sweep across it.*
 
 | Part | State |
 |---|---|
@@ -153,5 +163,6 @@ crates/
   sonorant/           the app: window, input, egui menus and dialogs
   sonorant-testdata/  loads the reference vectors for tests
 tests/reference/      vectors exported from Nostalgia+
+packaging/            the icon, desktop metadata, Flatpak, .deb, zip and winget
 docs/plan.md          the rewrite plan
 ```

@@ -54,6 +54,8 @@ possible, and follows whatever player is running instead of living inside one.
 | Packaging | Flatpak and `.deb`; a zip and winget; the Microsoft Store later | Decided |
 | Code signing | SignPath Foundation | Decided |
 | Store title | "Sonorant – Music Visualizer" | Decided |
+| CPU target | Three numbers, not one: analysis under 5% of a core, drawing under 1 ms of CPU a frame, under 10% together. The single "5% at 144 Hz" contradicted the analysis target | Decided, Phase 8 |
+| Time-axis mip chain | One max-pooled level, not the full chain, and after the first release: 18 MB against 155 for detail only a zoomed-out view shows | Decided, Phase 8 |
 
 ## Progress
 
@@ -70,8 +72,13 @@ from the frame rates and the screen readers that need hardware or a person at it
 visual delay, the end-to-end latency figure, the idle frame rate, OpenGL and software
 rendering, the accessibility tree and the 1440p frame budget Phase 6's gate was waiting
 on. Measuring it turned up two older bugs, one of which is that the frame cap had never
-capped. Of the [targets](#targets), CPU is the one missed, and as written it cannot be
-met: it contradicts the analysis target. Phase 8 begins at [Next](#next).
+capped. Phase 8 is written too: the app has an icon and tells the desktop who it is,
+and there is a `.desktop` entry, an AppStream description, a Flatpak manifest, `.deb`
+packages, a Windows zip, winget manifests and a release workflow that a tag sets off.
+Nothing has been released yet, and no Flatpak has been built anywhere. Phase 8 also had
+two calls to make and made both: the CPU target moved, because as written it
+contradicted the analysis target, and the time-axis mip chain is not being built as the
+plan described it. What is left is at [Next](#next).
 
 **Phase 0 (repository, CI, skeleton): done, except clean frame pacing and CI**
 
@@ -486,14 +493,15 @@ readers that need other machines**
   against a 6 ms budget. Phase 6 extrapolated "near 4 ms" from the 1200p figures and was
   a whole millisecond out. The parity views at the same size come to 1.46 ms against a
   3 ms budget.
-- [ ] **CPU is over target and the target cannot be met as written.** 9.4% of one core
+- [x] **CPU was over target, and the target could not be met as written.** 9.4% of one core
   at 60 Hz in the default view, fullscreen at 1920x1200: 5.1% the render thread, 3.4%
   analysis, 0.4% the source. The target is under 5% at 144 Hz. The render thread scales
   with the rate, so 144 Hz would be nearer 15%. **The two targets contradict each
   other:** "under 0.5 ms per hop" at 120 hops a second permits up to 6% of a core for
   analysis alone, before a pixel is drawn, and analysis really costs 3.4 to 4.7%. One of
   the two has to move, and the plan should say which rather than carry a number nothing
-  can reach. Phase 8's call.
+  can reach. **Phase 8 moved the CPU target and left the analysis target alone**, and
+  the app meets it as restated: see Phase 8 below and the [targets](#targets) table.
 
 **Two bugs the measuring found, both older than this phase.**
 
@@ -527,22 +535,117 @@ several threads at once. 40 runs clean since. Worth knowing before CI first runs
 Ubuntu runner, where this would have looked like a flaky test rather than a driver
 being asked to do something it does badly.
 
+**Phase 8 (packaging and release): the packages are written; nothing is released yet**
+
+- [x] **An icon, drawn rather than stored.** Five bars on a rounded tile, coloured out
+  of Magma, so the icon is made of the same ramp as the picture it stands for. The
+  shapes are described once in `sonorant-render`'s `icon` module, in a unit square, and
+  every form is generated from that one description: the six PNG sizes, the scalable
+  SVG, the Windows `.ico` (PNG entries, which Windows has read since Vista) and the raw
+  pixels the window is handed at start-up, which costs no file and no decoder. The bars
+  snap to the pixel grid at small sizes, without which a 16-pixel icon is five
+  half-covered columns and reads as a smear. A test redraws the committed files and
+  fails if they have drifted from the module.
+- [x] **The window says who it is.** The Wayland app id and the X11 window class are
+  both `io.github.nifraz.Sonorant`, which is what pairs the window with its `.desktop`
+  entry and its icon; without it GNOME shows a running Sonorant as a nameless grey
+  square. Windows and X11 take the icon from the window itself, Wayland from the
+  desktop entry, so both routes are covered. Checked on a live window rather than in
+  the source: `xprop` on a running Sonorant reports `WM_CLASS` as `"sonorant",
+  "io.github.nifraz.Sonorant"`, which is what the desktop entry's `StartupWMClass`
+  names, and a 64 by 64 `_NET_WM_ICON` beside it.
+- [x] **The desktop's own metadata**, validated rather than assumed: the `.desktop`
+  entry passes `desktop-file-validate` and the AppStream description passes
+  `appstreamcli validate --strict`, both in CI, offline. The only remark left is a
+  pedantic one about the capital S in the id, which the plan chose deliberately.
+- [x] **Three screenshots for the store listing**, taken by the app's own
+  `--screenshot` against the reference signal the DSP tests use, so anyone can take
+  them again. Worth writing down why they are taken with the artwork, the track info
+  and the backdrop switched off: Sonorant follows whatever is playing, and the first
+  set came out carrying the album art of a player running on the machine that took
+  them. A store picture should not be a picture of someone's library.
+- [x] **The Flatpak manifest**, with the permissions the plan listed, and its crate
+  list. A Flatpak build has no network, so all 499 crates have to be named up front;
+  `cargo-sources.py` writes that list from Cargo.lock alone, checksums included, so it
+  needs no network either and gives the same answer on every machine. CI checks the
+  committed list still matches the lock file, because a dependency bump that forgets it
+  would otherwise fail deep inside a Flathub build.
+- [x] **`.deb` packages**, built by a script that stages the binary, the desktop entry,
+  the AppStream file, every icon size, the copyright and a changelog, and hands the lot
+  to `dpkg-deb`. The binary links four libraries (libc, libgcc, libm and libpipewire),
+  because winit opens Wayland, X11 and xkbcommon with `dlopen` at run time, so the
+  Depends line is short and the rest are Recommends. Built and checked here: 6.9 MB,
+  and the program inside reports the version the package claims.
+- [x] **The Windows zip and the winget manifests.** No installer: Sonorant writes to
+  `%APPDATA%\Sonorant` and nothing else, so the download is the program, its licence,
+  its readme and its icon in a zip, and winget unpacks it as a portable package with
+  `sonorant` on the path. The version and the zip's checksum are stamped into the three
+  manifests by the release workflow.
+- [x] **The release workflow.** A `v*` tag stamps the version from the tag into
+  `Cargo.toml` and `Cargo.lock`, builds a `.deb` on x86-64 and on arm64 and the zip on
+  Windows, checks that the program inside each package reports the version the tag
+  asked for, and publishes the lot with a `SHA256SUMS` and generated notes. Running it
+  by hand builds and checks everything and stops before publishing, which is how it
+  gets tried without spending a tag.
+- [x] **Snap stays skipped**, as decided: its `audio-record` permission isn't connected
+  automatically, so capture wouldn't work out of the box.
+- [ ] **Nothing has been released.** No tag has been pushed, so the workflow has never
+  run, and the three things only it can prove are unproven: the Windows zip script has
+  never been run at all (there is no Windows machine here), the arm64 package has never
+  been built, and the stamping has only been tried locally.
+- [ ] **No Flatpak has been built.** There is no flatpak-builder on this machine. The
+  manifest and the crate list are checked as far as they can be, which is the list
+  against Cargo.lock; nobody has watched it build, and the Flathub submission is a
+  separate pull request against `flathub/flathub` with the source swapped from the
+  local directory to the release tag.
+- [ ] **The Windows download is unsigned.** [SignPath
+  Foundation](https://signpath.org/) is the decided route and has not been applied for.
+  Until then SmartScreen warns whoever runs it first; the build script signs if it is
+  given a certificate.
+- [ ] **The Nostalgia+ repo is untouched**: tagging the last plugin build `plugin-final`
+  and pointing its README here is a change to another repository, which has work in its
+  tree already, so it wants its owner rather than a passing script.
+
+**What Phase 8 had to decide.**
+
+- **The CPU target moved.** The old one, under 5% of one core at 144 Hz, could not be
+  met by any app that also met the analysis target: 0.5 ms a hop at 120 hops a second
+  is 6% of a core before a pixel is drawn. It is now three numbers instead of one:
+  analysis under 5% of a core, drawing under 1 ms of CPU a frame, and under 10% of a
+  core for the two together in the default view at 60 Hz. Measured: 3.4%, 0.85 ms and
+  9.4%. Splitting it this way says what actually costs what, and a per-frame figure for
+  drawing keeps meaning something at 144 Hz, where a share of a core does not.
+- **The time-axis mip chain is not being built as described**, and not before the
+  release. The [history store](#history-store) describes a max-pooled chain along time
+  so a zoomed-out view reads a coarser level instead of picking whichever row landed on
+  a pixel. The aliasing is real: the flat pane picks one row in twenty at the far end
+  of the wheel, and the waterfall one in five at its default zoom. But a full chain,
+  capped at the 1/32 the zoom range needs, costs about as much memory again as the
+  history itself, 155 MB against a 300 MB budget that is met at 270. The cheap shape is
+  one pooled level rather than a chain: pooled 8:1 it costs 18 MB, fixes the
+  waterfall's case outright and brings the flat pane's worst zoom to 2.5 rows a pixel.
+  Which level, and whether one is enough, wants the two views side by side rather than
+  arithmetic, so it is the first thing after the release rather than part of it.
+
 ### Next
 
-**Phase 8: packaging and release.** Everything Phase 7 owned is done or measured except
-the frame rates and the screen readers that need hardware or a person, and those go with
-the rest of the list below. Two things Phase 8 has to decide rather than build: what to
-do about the CPU target, which as written contradicts the analysis target (see Phase 7),
-and whether the time-axis mip chain is worth building.
+**Release the first version.** Every phase is written. What stands between here and
+`v0.1.0` is a tag: pushing one builds the packages, checks each reports the version the
+tag asked for, and publishes them. It has never run, so expect the first attempt to be
+the one that finds whatever is wrong with it, and run it by hand from the Actions tab
+first, which builds and checks everything and stops before publishing.
 
-**Carried past Phase 7, deliberately.** The [history store](#history-store) section
-describes a max-pooled mip chain along the time axis, so a zoomed-out view reads a
-coarser level instead of aliasing. Nothing has built it. The flat view and the waterfall
-both want it: zoomed out, a pane picks one row in twenty and a mesh row picks one in
-five, and what they pick is whatever happened to land there rather than what was
-loudest. It stays open because it is a quality question with a cost attached, and
-nothing measured in Phase 7 made it urgent: the frame budget has room at 1440p and the
-aliasing only shows when the view is zoomed well out.
+**Then the two submissions**, in whichever order suits: the Flathub pull request, which
+wants a Flatpak built and watched at least once locally first, and the winget one,
+which is a copy of the three stamped manifests the release produces into a pull request
+against `microsoft/winget-pkgs`. [SignPath Foundation](https://signpath.org/) is the
+decided route for signing the Windows download and has not been applied for; until it
+is, whoever runs the zip first gets a SmartScreen warning.
+
+**Then one pooled level of history.** Phase 8 decided the shape and left the building
+(see above): one max-pooled level rather than the full chain the [history
+store](#history-store) describes, which is what the flat pane's far zoom and the
+waterfall's default one both want, for 18 MB rather than 155.
 
 **Two states, not one, for a still image.** `Space` freezes the image where it is; the
 wheel and a drag park it somewhere in the history. They are held apart, and a parked view
@@ -573,9 +676,10 @@ or widen the golden's tolerance for a single boundary column.
 
 **Still wanting a machine this one isn't, or a person at it:** the first CI run; the
 144 and 240 Hz pacing checks and variable refresh; an Orca and a Narrator pass; the
-players Phase 4 has not seen; the scaling checks in Phase 5; and the reference PC's
+players Phase 4 has not seen; the scaling checks in Phase 5; the reference PC's
 HD 4400, where the OpenGL fixes above are very likely the same wall but have not been
-tried.
+tried; the Windows zip, which no Windows machine has built; and a Flatpak, which no
+machine has built.
 
 Carried over: the first frame's 100-odd ms of lazy initialisation (logged as a stall)
 could move into start-up, and swapping the capture source happens on the frame loop's
@@ -595,7 +699,7 @@ below it is to stop analysing, which `Space` promises not to do.
 | Frame pacing, 59.94 Hz panel, GeForce 840M on Direct3D 12, windowed, 40 s | 8% "missed" (counted per interval), stalls of 0.5 s | 59.6 fps, 11 of 2,205 refreshes missed (0.5%); one 0.5 s stall in five runs, blocked in the swapchain | No dropped frames in steady state |
 | Frame pacing, 60 Hz panel, Iris Xe on Vulkan, fullscreen 1920x1200, 28 s | not measured | 59.8 fps, 7 of 1,680 refreshes missed (0.4%); on OpenGL 3 of 720, on lavapipe 3 of 720 | No dropped frames in steady state |
 | Audio to drawn, Iris Xe, 1,657 frames | not measured | **Met:** mean 10.5 ms, p50 10.7, p99 15.1, max 15.9 | Under 30 ms to the photon |
-| CPU, default view, fullscreen 1920x1200 at 60 Hz | not measured | **Missed:** 9.4% of one core (render 5.1, analysis 3.4, source 0.4); 5.1% with nothing playing | Under 5% of one core at 144 Hz |
+| CPU, default view, fullscreen 1920x1200 at 60 Hz | not measured | **Met as Phase 8 restated the target:** 9.4% of one core (drawing 5.1, analysis 3.4, source 0.4), the drawing being 0.85 ms of CPU a frame; 5.1% with nothing playing. Missed the single 5% the target used to be | Analysis under 5%, drawing under 1 ms a frame, under 10% together |
 | Memory, 5.7 minutes of history | not measured | **Met:** 270 MB peak resident, of which 160 MB is the history | Under 300 MB |
 | First frame, release build, GeForce 840M | 4.3 s | 1.1-2.7 s, of which opening the GPU is 0.8-1.9 s | Under 300 ms |
 | First frame, release build, Iris Xe on Vulkan | not measured | **Met:** 128 ms (window 17, GPU 47, renderer 9, first frame 52) | Under 300 ms |
@@ -659,7 +763,7 @@ it affects.
 | Analysis | 1.4–2.5 ms per frame | Under 0.5 ms per hop (Balanced profile, stereo, 48 kHz) |
 | GPU time per frame | None (GDI+ draws on the CPU) | Under 3 ms at 2560×1440 on an integrated GPU for the parity views, and under 6 ms with every new visual on |
 | Audio to screen | Capture buffer plus up to one frame | Under 30 ms from the mix to the photon, not counting the display's own lag |
-| CPU | Not measured | Under 5% of one core at 144 Hz in the default view |
+| CPU | Not measured | Analysis under 5% of one core; drawing under 1 ms of CPU a frame; under 10% of one core for the two together, default view, fullscreen at 60 Hz. Phase 8 split the single "under 5% at 144 Hz" that stood here, which no app meeting the analysis target could reach |
 | Memory | Not measured | Under 300 MB with 5 minutes of history |
 | Start-up | Loads inside MusicBee | First frame in under 300 ms |
 | Download | 61 KB DLL | Under 15 MB |
@@ -799,7 +903,11 @@ time per pass, where today it shows fps, DSP time and paint time.
   stereo. The length is a setting.
 - **Zooming out stays cheap.** A compute pass builds a max-pooled mip chain along the time
   axis as rows arrive. A zoomed-out view reads a coarser level instead of aliasing, and
-  costs the same as the live view.
+  costs the same as the live view. *Not built. Phase 8 decided on one pooled level
+  instead of the chain, and after the first release: a chain deep enough for the whole
+  zoom range costs about as much memory again as the history, and one level pooled 8:1
+  costs 18 MB and covers both views that alias. Until then a zoomed-out pane shows
+  whichever row landed on a pixel rather than the loudest one it covers.*
 - **Row metadata:** a CPU ring beside the store keeps each row's timestamp, track ID and
   position in the track. It drives the time axis, double-click-to-seek (only inside the
   current track) and the hover time offset. Hover levels come from a one-texel async
@@ -1018,22 +1126,32 @@ analysis target; Phase 8 has to settle which of the two moves.*
   The last `mb_NostalgiaPlus.dll` release stays downloadable.
 - **Skip Snap.** Its `audio-record` permission isn't connected automatically, so capture
   wouldn't work out of the box.
+- **Done when:** a tagged release publishes packages for both systems that install and
+  run, and the two store submissions are in.
+
+*How it went is in [Progress](#progress). Everything on this list is written and, where
+a machine here could check it, checked: the `.deb` is built and its program runs, the
+metadata validates in CI, and the Flatpak's crate list is checked against Cargo.lock.
+Three things are not: no tag has been pushed, so the release workflow has never run and
+the Windows zip has never been built; no Flatpak has been built anywhere; and the
+Nostalgia+ repo has not been tagged or repointed. Phase 8's two decisions, the CPU
+target and the mip chain, are recorded in [Decisions](#decisions).*
 
 ## Feature checklist
 
 ### DSP (Phase 1)
 
-- [ ] Multi-resolution FFT: Fast, Balanced, High and Low latency profiles
-- [ ] Both stereo channels in one complex FFT
-- [ ] Windows: Hann, Hamming, Blackman-Harris, Nuttall, Gaussian and rectangular
-- [ ] Peak or energy band aggregation, spectral tilt
-- [ ] Rolling-percentile auto-range
-- [ ] Channel pairs: left/right, mid/side, left only, right only
-- [ ] Note, log and linear frequency axes; note ± cents readout
-- [ ] Attack and release, peak decay, averaging
-- [ ] LUFS-M, LUFS-S, LUFS-I, LRA
-- [ ] True peak, crest, overs
-- [ ] BPM, brightness
+- [x] Multi-resolution FFT: Fast, Balanced, High and Low latency profiles
+- [x] Both stereo channels in one complex FFT
+- [x] Windows: Hann, Hamming, Blackman-Harris, Nuttall, Gaussian and rectangular
+- [x] Peak or energy band aggregation, spectral tilt
+- [x] Rolling-percentile auto-range
+- [x] Channel pairs: left/right, mid/side, left only, right only
+- [x] Note, log and linear frequency axes; note ± cents readout
+- [x] Attack and release, peak decay, averaging
+- [x] LUFS-M, LUFS-S, LUFS-I, LRA
+- [x] True peak, crest, overs
+- [x] BPM, brightness
 
 ### Drawing (Phase 3)
 
