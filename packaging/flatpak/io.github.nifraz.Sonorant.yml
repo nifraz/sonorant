@@ -1,0 +1,69 @@
+# The Flatpak build. Flathub's own copy of this file differs in one place: the source
+# below is a `dir` so that a clone can be built as it stands, and Flathub replaces it
+# with the git URL and the release tag.
+#
+#   flatpak install flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08 \
+#       org.freedesktop.Sdk.Extension.rust-stable//25.08
+#   flatpak-builder --user --install --force-clean build \
+#       packaging/flatpak/io.github.nifraz.Sonorant.yml
+#
+# `cargo-sources.json` is generated from Cargo.lock by `cargo-sources.py` beside it: a
+# Flatpak build has no network, so every crate is fetched by flatpak-builder first and
+# cargo is pointed at the result. Regenerate it whenever Cargo.lock changes; CI checks
+# that the two agree.
+id: io.github.nifraz.Sonorant
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: sonorant
+
+finish-args:
+  # Wayland where there is one, X11 where there isn't, and the GPU either way.
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Capture. PipeWire's own socket, because Sonorant records the monitor of the sink
+  # and, when asked, one app's stream alone; the PulseAudio shim offers neither.
+  - --filesystem=xdg-run/pipewire-0
+  # Now playing: whichever players are running, over MPRIS.
+  - --talk-name=org.mpris.MediaPlayer2.*
+  # Artwork a player hands over as an `https://` URL rather than a file.
+  - --share=network
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/sonorant/cargo
+
+modules:
+  - name: sonorant
+    buildsystem: simple
+    build-options:
+      env:
+        # Everything is vendored below, so a lookup that reaches for the network is a
+        # bug in the source list rather than something to wait for.
+        CARGO_NET_OFFLINE: 'true'
+    build-commands:
+      # `--locked` builds exactly what cargo-sources.json was generated from. The
+      # toolchain is the SDK extension's: plain cargo doesn't read rust-toolchain.toml,
+      # which only rustup acts on, and it fails loudly if it is older than the
+      # `rust-version` in Cargo.toml.
+      - cargo --offline build --release --locked -p sonorant
+      - install -Dm755 target/release/sonorant /app/bin/sonorant
+      - install -Dm644 packaging/linux/$FLATPAK_ID.desktop
+        /app/share/applications/$FLATPAK_ID.desktop
+      - install -Dm644 packaging/linux/$FLATPAK_ID.metainfo.xml
+        /app/share/metainfo/$FLATPAK_ID.metainfo.xml
+      - for s in 16 32 48 64 128 256; do install -Dm644 packaging/icons/sonorant-$s.png
+        /app/share/icons/hicolor/${s}x${s}/apps/$FLATPAK_ID.png; done
+      - install -Dm644 packaging/icons/sonorant.svg
+        /app/share/icons/hicolor/scalable/apps/$FLATPAK_ID.svg
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - .git
+      - cargo-sources.json
