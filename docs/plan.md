@@ -62,13 +62,16 @@ machines, a real player or CI. Every piece Phase 3 deferred has now arrived: the
 backdrop in Phase 4, and the harmonic ruler and the quick bar in Phase 5. The three
 targets missed at the start are met or explained (see [Measurements](#measurements)).
 Phase 6 is written: the phosphor scope, the zoomable long history, the beat-reactive
-backdrop, the 3D waterfall and the quality setting are all in, and what is left of its
-gate is one measurement Phase 7 owns. A Linux machine has now built and run the app, so
+backdrop, the 3D waterfall and the quality setting are all in, and its gate is now
+measured rather than extrapolated. A Linux machine has now built and run the app, so
 the PipeWire capture compiles for the first time, lavapipe has goldens of its own, and
-Phase 4's now-playing half has been seen following a real player. Phase 7 has begun:
-the visual delay is in, and lines the picture up with the speakers by holding the
-analysis back, with the offset filling itself in from what PipeWire says the sink
-costs. What is left of Phase 7 is at [Next](#next).
+Phase 4's now-playing half has been seen following a real player. Phase 7 is done apart
+from the frame rates and the screen readers that need hardware or a person at it: the
+visual delay, the end-to-end latency figure, the idle frame rate, OpenGL and software
+rendering, the accessibility tree and the 1440p frame budget Phase 6's gate was waiting
+on. Measuring it turned up two older bugs, one of which is that the frame cap had never
+capped. Of the [targets](#targets), CPU is the one missed, and as written it cannot be
+met: it contradicts the analysis target. Phase 8 begins at [Next](#next).
 
 **Phase 0 (repository, CI, skeleton): done, except clean frame pacing and CI**
 
@@ -320,7 +323,7 @@ top corners.
 - [ ] **The transport and the seek bar against a real player.** They are wired to the
   same `send` Phase 4 left guarded, and nothing has pressed them with a player running.
 
-**Phase 6 (new visuals): all five are in; the 1440p figure is Phase 7's**
+**Phase 6 (new visuals): all five are in, and the 1440p figure is now measured**
 
 - [x] **The phosphor scope** (`render/phosphor.rs`). The goniometer keeps a
   floating-point accumulator between frames, fades it by how much real time has passed
@@ -388,8 +391,10 @@ top corners.
     glow all on: 1.15 ms a frame on Low at 1280x720, 1.47 on Medium, 1.91 on High.
     Fullscreen at 1920x1200, Medium comes to 2.76 ms (visuals 0.9, landscape 0.7, glow
     0.5, composite 0.6, furniture 0.1). 2560x1440 is 1.6 times those pixels and only the
-    landscape is not pixel-bound, which puts it near 4 ms. The offscreen 1440p
-    measurement itself is Phase 7's, as the plan's own [targets](#targets) say.
+    landscape is not pixel-bound, which was extrapolated to near 4 ms. **Phase 7
+    measured it offscreen and it is 5.21 ms on Medium**, 4.70 on Low and 5.57 on High:
+    inside the 6 ms budget, and a whole millisecond past what the arithmetic said. The
+    gate is met on the figure rather than on the estimate.
 
 **What a golden cannot be asked to do.** The backdrop is in the scene golden, but at a
 backdrop's strength it moves the mean by a third of a level out of 255, well inside the
@@ -399,17 +404,17 @@ itself, not a picture of everything at once: the backdrop's own test renders it 
 finds the ring where the phase says it should be, and checks the light is behind the
 front rather than ahead of it.
 
-**Phase 7 (tuning and polish): the visual delay is in; the rest is open**
+**Phase 7 (tuning and polish): done, apart from the refresh rates and the screen
+readers that need other machines**
 
 - [x] **The visual delay.** Capture taps the mix before the hardware plays it, so the
   picture runs early by whatever the output path costs. The offset that fixes it is a
   setting, 0 to 500 ms, and holding the picture back is done in one place: the analysis
-  thread leaves that much audio unread in the capture ring
-  (`runtime::take_now`). Everything downstream is then late together, rows and curves
-  and meters and the audio clock the picture scrolls by, with no second copy of
-  anything and nothing to keep in step. Holding it back at the drawing end would have
-  meant a delay line for each of those, and a clock still telling the truth about a
-  moment nobody had heard yet.
+  thread leaves that much audio unread in the capture ring (`runtime::take_now`).
+  Everything downstream is then late together, rows and curves and meters and the audio
+  clock the picture scrolls by, with no second copy of anything and nothing to keep in
+  step. Holding it back at the drawing end would have meant a delay line for each of
+  those, and a clock still telling the truth about a moment nobody had heard yet.
 - [x] **It fills itself in on Ubuntu** (`platform/linux/sink_delay.rs`). Every PipeWire
   sink publishes a `Latency` parameter, and the entry for its input side is how long
   after a player hands over a buffer the sound is heard. Finding which sink is a walk
@@ -428,11 +433,90 @@ front rather than ahead of it.
     its own and nothing on the wire says how much, so the automatic figure is a floor
     and the offset is there to be nudged. Nothing reports it on Windows, where the
     switch is greyed out and says so.
-- [ ] Frame pacing on 60, 144 and 240 Hz and on variable refresh. Mailbox presentation
-  is already a setting, and the surface's modes decide which of the three the menu
-  offers.
-- [ ] Latency end to end, power, the accessibility pass, and the weak-GPU checks.
-- [ ] The offscreen 1440p GPU measurement Phase 6's gate is waiting on.
+- [x] **Latency, measured rather than reasoned about** (`latency.rs`). The analysis
+  thread stamps each snapshot with the time it was published and how much captured
+  audio was still unread when it was, and the age of what is on screen is the two added
+  together. Comparing the analysis's frame count with the capture's would have been the
+  obvious way and does not survive the two moments those counters restart, a sample-rate
+  change and a source swap; the backlog is measured where both are known at once.
+  **Met:** mean 10.5 ms, p99 15.1 ms, over 1,657 frames. The status line carries it and
+  the run logs it.
+- [x] **Power.** A covered window already drew nothing. Now a window with nothing
+  playing redraws at 10 fps instead of at the display's rate (`idle.rs`): three seconds
+  of silence, or a source that has stopped, and the rate drops; one frame with sound in
+  it and it is back. Only frames the app asks for itself are paced that way, so a key,
+  a click or a pointer moving still draws at once, and frames on the idle clock are
+  left out of the pacing figures rather than counted as the worst stutter of the run.
+  **The render thread goes from 5.1% of a core to 0.9%**, and the app from 9.4% to
+  5.1%. What is left is the analysis thread, which carries on by design: `Space` says
+  "analysis carries on" and the picture has to be right the instant the sound is back.
+- [x] **Mailbox presentation** was already a setting, offered when the surface has it.
+- [x] **Weak GPUs: OpenGL now works, and it did not.** Two downlevel limits, both fatal
+  rather than degraded: configuring the swapchain with a separate sRGB view format
+  needs `SURFACE_VIEW_FORMATS`, and the cover's texture asked for a view in another
+  format, which needs `VIEW_FORMATS`. Neither is a warning; each takes the program with
+  it. The first is answered by choosing an sRGB surface format outright where a view
+  cannot be had, the second by giving the two cover textures the formats they wanted in
+  the first place, which is one copy of a thumbnail and no views at all. **59.8 fps at
+  1920x1200 on the OpenGL backend afterwards**, 3 missed refreshes in 720, 2.97 ms of
+  GPU time. This is the same class of failure the plan recorded against the reference
+  PC's HD 4400 and very likely the same wall; that machine has not been tried since.
+  - A screenshot needs the swapchain to be copyable and OpenGL's is not, which used to
+    take the program down as well. It now says so and carries on drawing.
+- [x] **Software rendering works too.** lavapipe at 1920x1200 holds **59.7 fps** with
+  the parity views, 3 missed in 720, at 10.1 ms of GPU time: the CPU renderer keeps up
+  because that work spreads over cores that are otherwise idle. With every new visual
+  on it does not, 35.8 fps at 23.3 ms, and the quality setting only gets that to 37.7
+  at Low, because at this size nearly everything is pixel-bound and only the landscape
+  is not. The honest conclusion is that the new visuals are not for a software
+  renderer, and the parity views are.
+- [x] **Accessibility, as far as a machine with nobody at it can go.** The app appears
+  in the AT-SPI tree once something asks, and what it put there said nothing useful:
+  the window had no name and the picture was an unnamed node. The window is now named
+  and the visuals are an `Image` called "Analyser" whose description is the reading the
+  status line shows, which is the useful thing to say about a picture of sound. Checked
+  by walking the live AT-SPI tree, not by reading the code. A real Orca or Narrator
+  pass still wants a person at the machine.
+- [ ] **Frame pacing on 144 and 240 Hz and on variable refresh.** 60 Hz is met and
+  measured below. The other rates need a monitor this machine hasn't got.
+- [x] **The offscreen 1440p measurement Phase 6's gate was waiting on.** `--render-size`
+  pins how many pixels are drawn whatever the window is, so the budget can be measured
+  at a size the screen hasn't got. **Met, and worth having measured:** with every visual
+  on at 2560x1440 the frame costs 4.70 ms on Low, **5.21 on Medium** and 5.57 on High,
+  against a 6 ms budget. Phase 6 extrapolated "near 4 ms" from the 1200p figures and was
+  a whole millisecond out. The parity views at the same size come to 1.46 ms against a
+  3 ms budget.
+- [ ] **CPU is over target and the target cannot be met as written.** 9.4% of one core
+  at 60 Hz in the default view, fullscreen at 1920x1200: 5.1% the render thread, 3.4%
+  analysis, 0.4% the source. The target is under 5% at 144 Hz. The render thread scales
+  with the rate, so 144 Hz would be nearer 15%. **The two targets contradict each
+  other:** "under 0.5 ms per hop" at 120 hops a second permits up to 6% of a core for
+  analysis alone, before a pixel is drawn, and analysis really costs 3.4 to 4.7%. One of
+  the two has to move, and the plan should say which rather than carry a number nothing
+  can reach. Phase 8's call.
+
+**Two bugs the measuring found, both older than this phase.**
+
+- **The frame cap never capped.** egui answers every window event with "draw again",
+  including the redraw it has just been handed, and the app passed that straight on to
+  `request_redraw`, so the next frame was always asked for at once and `frame_interval`
+  decided nothing. Measured at HEAD: a 30 fps cap gave 59.9 fps. The frame a frame asks
+  for itself is now scheduled in one place, and what egui wants for its own animations
+  is carried separately as a delay rather than as a demand, so a menu still animates
+  under a cap. A 30 fps cap now gives 29.2 fps and a 60 fps cap 57.1. The idle rate
+  above would not have worked either without this.
+- **A timed run never ended while its window was hidden.** The deadline was noticed
+  where frames are drawn, and a Wayland compositor stops delivering frame callbacks to
+  a window it isn't showing, without always saying it is occluded, so the loop sat on a
+  redraw request that never came. Found by a `--pacing-seconds 12` run that took 100
+  seconds. The deadline is now checked where the loop waits, and the wait is bounded by
+  it.
+
+**What a Wayland window doesn't know at start-up.** The refresh rate came back unknown,
+which meant nothing could be counted as missed on Linux at all: a window doesn't know
+which output it is on until the compositor says so, which is after start-up. It is
+asked for again four times a second until it is known, and arrives about a second in.
+Every missed-refresh figure on Linux in this plan exists because of that one line.
 
 **A crash in the goldens, found here and fixed here.** The golden tests opened a Vulkan
 instance apiece, and seven of them at once segfaults inside Mesa's software renderer
@@ -445,17 +529,20 @@ being asked to do something it does badly.
 
 ### Next
 
-Phase 7's remaining half: pacing on other refresh rates, latency end to end, power, a
-pass with Orca and Narrator, and the weak-GPU checks. Before or alongside it, the things
-that still need a machine this one isn't: the first CI run, the players Phase 4 has not
-seen, and the scaling checks in Phase 5.
+**Phase 8: packaging and release.** Everything Phase 7 owned is done or measured except
+the frame rates and the screen readers that need hardware or a person, and those go with
+the rest of the list below. Two things Phase 8 has to decide rather than build: what to
+do about the CPU target, which as written contradicts the analysis target (see Phase 7),
+and whether the time-axis mip chain is worth building.
 
-**Carried into Phase 7 from here.** The [history store](#history-store) section describes
-a max-pooled mip chain along the time axis, so a zoomed-out view reads a coarser level
-instead of aliasing. Nothing has built it. The flat view and the waterfall both want it:
-zoomed out, a pane picks one row in twenty and a mesh row picks one in five, and what
-they pick is whatever happened to land there rather than what was loudest. It is a
-Phase 7 job because it is a cost and quality question rather than a missing visual.
+**Carried past Phase 7, deliberately.** The [history store](#history-store) section
+describes a max-pooled mip chain along the time axis, so a zoomed-out view reads a
+coarser level instead of aliasing. Nothing has built it. The flat view and the waterfall
+both want it: zoomed out, a pane picks one row in twenty and a mesh row picks one in
+five, and what they pick is whatever happened to land there rather than what was
+loudest. It stays open because it is a quality question with a cost attached, and
+nothing measured in Phase 7 made it urgent: the frame budget has room at 1440p and the
+aliasing only shows when the view is zoomed well out.
 
 **Two states, not one, for a still image.** `Space` freezes the image where it is; the
 wheel and a drag park it somewhere in the history. They are held apart, and a parked view
@@ -484,13 +571,20 @@ That lowers it from a CI blocker to a Windows-runner one, and the fix stays the 
 it bites: draw the strip without a viewport, using a scissor or the rect in the shader,
 or widen the golden's tolerance for a single boundary column.
 
-Still wanting a machine this one isn't: the first CI run, the player checks in Phase 4
-and the scaling checks above. Carried over: the first
-frame's 100-odd ms of lazy initialisation (logged as a stall) could move into start-up,
-and swapping the capture source happens on the frame loop's thread, so following
-a player costs a frame. Two new ones: the settings are only written on exit, so a
-crash loses what the menu changed, and the history is sized for five minutes at the
+**Still wanting a machine this one isn't, or a person at it:** the first CI run; the
+144 and 240 Hz pacing checks and variable refresh; an Orca and a Narrator pass; the
+players Phase 4 has not seen; the scaling checks in Phase 5; and the reference PC's
+HD 4400, where the OpenGL fixes above are very likely the same wall but have not been
+tried.
+
+Carried over: the first frame's 100-odd ms of lazy initialisation (logged as a stall)
+could move into start-up, and swapping the capture source happens on the frame loop's
+thread, so following a player costs a frame. The settings are only written on exit, so
+a crash loses what the menu changed, and the history is sized for five minutes at the
 scroll speed it started with, so changing the speed changes how far back it reaches.
+New from Phase 7: while nothing is playing the analysis thread is 3.4% of a core
+measuring silence, which is most of what the app costs when idle, and the only way
+below it is to stop analysing, which `Space` promises not to do.
 
 ### Measurements
 
@@ -499,14 +593,24 @@ scroll speed it started with, so changing the speed changes how far back it reac
 | Whole hop at 120 hops per second, Balanced (engine, per hop) | 1.18 ms | **Met:** median 0.37 ms, mean 0.48 ms, minimum 0.20 ms | Under 0.5 ms |
 | Display projection, 1,080 columns / history grid, 2,048 bins | 0.32 / 0.59 ms | 0.03-0.07 / 0.06-0.14 ms | |
 | Frame pacing, 59.94 Hz panel, GeForce 840M on Direct3D 12, windowed, 40 s | 8% "missed" (counted per interval), stalls of 0.5 s | 59.6 fps, 11 of 2,205 refreshes missed (0.5%); one 0.5 s stall in five runs, blocked in the swapchain | No dropped frames in steady state |
+| Frame pacing, 60 Hz panel, Iris Xe on Vulkan, fullscreen 1920x1200, 28 s | not measured | 59.8 fps, 7 of 1,680 refreshes missed (0.4%); on OpenGL 3 of 720, on lavapipe 3 of 720 | No dropped frames in steady state |
+| Audio to drawn, Iris Xe, 1,657 frames | not measured | **Met:** mean 10.5 ms, p50 10.7, p99 15.1, max 15.9 | Under 30 ms to the photon |
+| CPU, default view, fullscreen 1920x1200 at 60 Hz | not measured | **Missed:** 9.4% of one core (render 5.1, analysis 3.4, source 0.4); 5.1% with nothing playing | Under 5% of one core at 144 Hz |
+| Memory, 5.7 minutes of history | not measured | **Met:** 270 MB peak resident, of which 160 MB is the history | Under 300 MB |
 | First frame, release build, GeForce 840M | 4.3 s | 1.1-2.7 s, of which opening the GPU is 0.8-1.9 s | Under 300 ms |
 | First frame, release build, Iris Xe on Vulkan | not measured | **Met:** 128 ms (window 17, GPU 47, renderer 9, first frame 52) | Under 300 ms |
 | GPU time a frame, 1920x1080 fullscreen, GeForce 840M | not measured | 2.9 ms (visuals 1.0, composite 0.8, furniture 1.0); 3.3 ms with the glow | Under 3 ms at 2560x1440, under 6 ms with every new visual |
+| GPU time a frame, 2560x1440 offscreen, Iris Xe | not measured | **Met:** parity views 1.46 ms; every visual on, 4.70 ms Low, 5.21 Medium, 5.57 High | Under 3 ms, and under 6 ms with every new visual |
 | Release binary (Windows, GNU toolchain) | 14.2 MB | 16.9 MB; 7.1 MB zipped | Under 15 MB download |
 
 The GPU figures are from the 840M at 1920x1080, which is what this machine's screen
 allows; 2560x1440 has to be timed offscreen, which is a Phase 7 job. A fullscreen run
 with the glow on held 59.9 fps over 687 frames with no missed refreshes.
+
+The 1440p figures are drawn at that size with `--render-size`, which pins how many
+pixels a frame covers whatever the window is. The compositor scales the result down to
+fit the screen; the work the GPU is asked for is the work the bigger screen would ask
+for, which is what the budget is about.
 
 Start-up meets its target on the Ubuntu machine and not on the Windows one, and the
 difference is all in opening the GPU: 47 ms for Vulkan on an always-on Iris Xe against
@@ -891,6 +995,11 @@ Phase 0 has no dependencies. Phases 1 and 2 can run in parallel after it.
 - **Accessibility:** a pass with Orca and Narrator.
 - **Weak GPUs:** check the OpenGL backend and software rendering.
 - **Done when:** the [targets](#targets) are met on the two reference machines.
+
+*How it went is in [Progress](#progress). Everything here is done and measured except
+the 144 and 240 Hz checks, variable refresh, and the screen-reader passes, all of which
+want hardware or a person. The CPU target was missed and turned out to contradict the
+analysis target; Phase 8 has to settle which of the two moves.*
 
 ### Phase 8: packaging and release
 

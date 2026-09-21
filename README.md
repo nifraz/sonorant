@@ -9,12 +9,13 @@ plan, with every decision and phase, is in [docs/plan.md](docs/plan.md).
 
 ## Status
 
-Early work: Phases 0 to 6 are written, so the app captures, analyses and draws the parity
+Early work: Phases 0 to 7 are written, so the app captures, analyses and draws the parity
 views, follows whatever is playing, runs off its own menu, and has the five visuals that
 are new here: the phosphor scope, the zoomable long history, the beat-reactive backdrop,
-the 3D waterfall and the quality setting that scales them. Phase 7, tuning and polish, has
-begun with the visual delay, which lines the picture up with the speakers. What each phase
-still leaves open is in [Progress](docs/plan.md#progress) in the plan.
+the 3D waterfall and the quality setting that scales them. Phase 7 lines the picture up
+with the speakers, drops the frame rate when nothing is playing, and has been measured on
+an Iris Xe, on OpenGL and on a software renderer. Phase 8, packaging and release, is next.
+What each phase still leaves open is in [Progress](docs/plan.md#progress) in the plan.
 
 | Part | State |
 |---|---|
@@ -22,7 +23,7 @@ still leaves open is in [Progress](docs/plan.md#progress) in the plan.
 | `sonorant-core` | Every setting and preset, TOML settings, presets and themes, the Nostalgia+ importer, palettes, the analysis engine and thread, and a WAV source |
 | `sonorant-platform` | Windows: WASAPI loopback of the whole system or one app, and now playing from SMTC. Linux: PipeWire capture, now playing from MPRIS, which has been seen following a real player, and the sink's own latency, which the visual delay follows |
 | `sonorant-render` | The whole picture: the pane and deck layouts, the GPU history store, the spectrogram, the curve strips, a text and shape overlay (IBM Plex, bundled) carrying the grid, scales and labels, the waveform lanes, goniometer, meters and readouts, the colour bar and status line, the floating-point target and its glow, GPU pass timing, and golden renders. The new visuals too: the phosphor screen, the beat-reactive backdrop and the 3D waterfall |
-| `sonorant` | The app: the window and the frame loop, the menu and the keyboard over one model, the searchable help, the hover readout, the quick bar and the transport, and the wheel and drag that walk back through the history or orbit the waterfall; `sonorant capture` runs the pipeline without a window |
+| `sonorant` | The app: the window and the frame loop, the menu and the keyboard over one model, the searchable help, the hover readout, the quick bar and the transport, and the wheel and drag that walk back through the history or orbit the waterfall. Also the tuning: the visual delay, the end-to-end latency figure, the frame cap and the idle rate; `sonorant capture` runs the pipeline without a window |
 
 ## Building
 
@@ -65,6 +66,8 @@ cargo run --release -- --wav song.wav      # a WAV file, looped, instead of capt
 cargo run --release -- --pacing-seconds 30 --pacing-log pacing.csv
 cargo run --release -- --screenshot shot.png  # save the picture after 5 s, then exit
 cargo run --release -- --settings some/folder # settings of its own, for clean runs
+cargo run --release -- --render-size 2560x1440 --pacing-seconds 10   # time a size
+cargo run --release -- --backend gl           # the OpenGL fallback, for old GPUs
 cargo run --release -- capture --seconds 10   # no window: print loudness once a second
 cargo run --release -- apps                   # the apps that can be captured alone
 ```
@@ -95,8 +98,14 @@ followed. The strip of buttons over the image is the quick bar, for the switches
 most often; it can be made compact or switched off.
 
 The status line shows what is being captured, loudness and tempo, the frame rate, the
-99th percentile frame interval and the refreshes missed. On exit the pacing figures for
-the whole run are logged.
+refreshes missed, what the GPU spends on a frame, and how far behind the sound the
+picture is. On exit the pacing and latency figures for the whole run are logged.
+
+**Power.** Nothing is drawn while the window is covered, and while nothing is playing
+the screen is redrawn ten times a second instead of at the display's rate, which takes
+the app from about 9% of a core to 5%. Anything you do draws at once; what slows down is
+the part with nothing new in it. Analysis carries on either way, so the picture is right
+the instant the sound is back.
 
 **Visual delay.** Capture taps the mix before the hardware plays it, so without an offset
 the picture runs ahead of the sound. `Visual delay` in the menu holds it back, and on
