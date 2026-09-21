@@ -1,0 +1,210 @@
+name: Release
+
+# Tagging `v0.1.0` builds the packages and publishes the release. Running it by hand
+# builds the same packages, stamps them with whatever version is given, and stops
+# before publishing anything, which is how the whole thing is tried out.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build, without publishing (e.g. 0.1.0-test)
+        required: true
+        default: 0.0.0-test
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.pick.outputs.version }}
+      publish: ${{ steps.pick.outputs.publish }}
+    steps:
+      - name: Pick the version
+        id: pick
+        run: |
+          if [ "${{ github.event_name }}" = push ]; then
+            version=${GITHUB_REF_NAME#v}
+            publish=true
+          else
+            version='${{ inputs.version }}'
+            publish=false
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "building $version, publish=$publish"
+
+  linux:
+    name: ${{ matrix.os }}
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      - name: Linux packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config clang libclang-dev \
+            libpipewire-0.3-dev libspa-0.2-dev \
+            libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
+
+      - name: Toolchain
+        run: rustup toolchain install
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Stamp the version
+        run: ./packaging/stamp-version.sh '${{ needs.version.outputs.version }}'
+
+      - name: Build the package
+        run: ./packaging/deb/build.sh --version '${{ needs.version.outputs.version }}'
+
+      # What the package says it is, and that the program inside it agrees.
+      - name: Check the package
+        run: |
+          deb=$(ls target/deb/*.deb)
+          dpkg-deb --info "$deb"
+          dpkg-deb --contents "$deb"
+          dpkg-deb --extract "$deb" unpacked
+          version=$(./unpacked/usr/bin/sonorant --version)
+          echo "$version"
+          [ "$version" = "sonorant ${{ needs.version.outputs.version }}" ]
+
+      - name: Keep it
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.os }}
+          path: target/deb/*.deb
+          if-no-files-found: error
+
+  windows:
+    name: windows-latest
+    needs: version
+    runs-on: windows-latest
+    outputs:
+      sha256: ${{ steps.zip.outputs.sha256 }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      - name: Toolchain
+        run: rustup toolchain install
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Stamp the version
+        shell: bash
+        run: ./packaging/stamp-version.sh '${{ needs.version.outputs.version }}'
+
+      - name: Build the zip
+        id: zip
+        shell: pwsh
+        run: |
+          ./packaging/windows/build.ps1 -Version '${{ needs.version.outputs.version }}'
+          # Read back rather than parse what the script printed: winget's manifest wants
+          # this checksum, and a stray line of build output must not end up in it.
+          $zip = Get-Item target/zip/*.zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "sha256=$hash" >> $env:GITHUB_OUTPUT
+          Write-Output "$($zip.Name) $hash"
+
+      - name: Keep it
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: target/zip/*
+          if-no-files-found: error
+
+  release:
+    name: Publish
+    needs: [version, linux, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      - name: Collect the packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: |
+          rm -f ./*.sha256
+          sha256sum ./*.deb ./sonorant-*.zip | sed 's| \./| |' > SHA256SUMS
+          cat SHA256SUMS
+
+      # The three files a winget submission is made of, with the version and the zip's
+      # checksum filled in, so that opening the pull request against
+      # microsoft/winget-pkgs is a copy rather than an edit. They stay a build artifact
+      # rather than a release download: they are for whoever submits it, not for anyone
+      # installing the program.
+      - name: Winget manifests
+        run: |
+          mkdir -p dist/winget
+          for f in packaging/winget/*.yaml; do
+            sed -e 's/__VERSION__/${{ needs.version.outputs.version }}/g' \
+                -e 's/__SHA256__/${{ needs.windows.outputs.sha256 }}/g' \
+                "$f" > "dist/winget/$(basename "$f")"
+          done
+          grep -h 'PackageVersion\|InstallerSha256' dist/winget/*.yaml
+          ! grep -rq '__' dist/winget/
+          (cd dist && zip -q -r winget-manifests.zip winget && rm -r winget)
+
+      - name: Notes
+        run: |
+          version='${{ needs.version.outputs.version }}'
+          {
+            echo "Sonorant $version."
+            echo
+            echo "| Download | For |"
+            echo "|---|---|"
+            echo "| \`sonorant_${version}_amd64.deb\` | Ubuntu 24.04 or later, x86-64 |"
+            echo "| \`sonorant_${version}_arm64.deb\` | Ubuntu 24.04 or later, arm64 |"
+            echo "| \`sonorant-${version}-windows-x64.zip\` | Windows 10 or 11 |"
+            echo
+            echo "The Windows zip is unsigned, so SmartScreen will ask before running it."
+            echo "\`SHA256SUMS\` has the checksum of every file here."
+            echo
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+          } > notes.md
+          cat notes.md
+
+      - name: Publish
+        if: needs.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Sonorant ${{ needs.version.outputs.version }}" \
+            --notes-file notes.md \
+            dist/*.deb dist/sonorant-*.zip dist/SHA256SUMS
+
+      - name: Keep the whole set
+        uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: |
+            dist/*
+            notes.md
+          if-no-files-found: error

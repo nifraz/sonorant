@@ -58,3 +58,32 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check advisories bans licenses sources
+
+  packaging:
+    name: Packaging metadata
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            appstream desktop-file-utils
+
+      # The desktop entry and the AppStream description are what GNOME Software and
+      # Flathub read; a mistake in either shows up as an app with no icon or no
+      # listing, which no Rust test would catch. No network: the screenshots are
+      # fetched from the branch this is checking, which may not be pushed yet.
+      - name: Desktop entry and AppStream
+        run: |
+          desktop-file-validate packaging/linux/io.github.nifraz.Sonorant.desktop
+          appstreamcli validate --no-net --strict --explain \
+            packaging/linux/io.github.nifraz.Sonorant.metainfo.xml
+
+      # A Flatpak build has no network, so its crate list is generated from Cargo.lock
+      # and committed. A dependency bump that forgets it would fail deep inside a
+      # Flathub build instead of here.
+      - name: Flatpak sources
+        run: python3 packaging/flatpak/cargo-sources.py --check
