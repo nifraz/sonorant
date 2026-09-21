@@ -10,6 +10,7 @@
 //! the test says so, so a new renderer can be adopted by copying the file in.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use half::f16;
 use sonorant_core::dsp::{FreqScale, FrequencyMap, LoudnessReadings};
@@ -42,8 +43,27 @@ const MEAN_TOLERANCE: f64 = 1.5;
 /// The most any one channel may differ by.
 const MAX_TOLERANCE: u8 = 72;
 
+/// The one GPU this binary draws on, opened the first time it is asked for.
+///
+/// A device apiece read more simply and crashed: seven tests opening seven Vulkan
+/// instances at once segfaults inside Mesa's software renderer about one run in seven,
+/// with nothing in the app's own code on the stack. Serially it never happens, which is
+/// what a shared device gives without having to run the tests one at a time: a device
+/// is safe to use from several threads at once, each test builds its own textures on
+/// it, and nothing is torn down until the process ends.
+fn open_gpu() -> Option<(
+    &'static wgpu::Device,
+    &'static wgpu::Queue,
+    &'static str,
+    bool,
+)> {
+    static GPU: OnceLock<Option<(wgpu::Device, wgpu::Queue, String, bool)>> = OnceLock::new();
+    let (device, queue, name, software) = GPU.get_or_init(open_one_gpu).as_ref()?;
+    Some((device, queue, name.as_str(), *software))
+}
+
 /// A GPU to draw on, preferring a software renderer so the pixels are reproducible.
-fn open_gpu() -> Option<(wgpu::Device, wgpu::Queue, String, bool)> {
+fn open_one_gpu() -> Option<(wgpu::Device, wgpu::Queue, String, bool)> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
     let adapter = adapters.into_iter().max_by_key(|a| {
@@ -554,13 +574,13 @@ fn the_cover_fills_its_frame() {
     });
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
     let artwork = ArtworkPass::new(
-        &device,
+        device,
         wgpu::TextureFormat::Rgba8Unorm,
         bloom::TARGET_FORMAT,
     );
-    let cover = artwork.upload(&device, &queue, &Picture::solid(8, 8, [255, 0, 0, 255]));
+    let cover = artwork.upload(device, queue, &Picture::solid(8, 8, [255, 0, 0, 255]));
     let frame = Rect::new(16, 8, 32, 24);
-    artwork.prepare(&queue, (SIDE, SIDE), frame, 1.0, 0.0);
+    artwork.prepare(queue, (SIDE, SIDE), frame, 1.0, 0.0);
 
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("cover"),
@@ -586,9 +606,9 @@ fn the_cover_fills_its_frame() {
             .forget_lifetime();
         artwork.draw_deck(&mut pass, &cover);
     }
-    let shot = Readback::record(&device, &mut encoder, &target);
+    let shot = Readback::record(device, &mut encoder, &target);
     queue.submit([encoder.finish()]);
-    let (w, _h, pixels) = shot.pixels(&device).expect("the frame reads back");
+    let (w, _h, pixels) = shot.pixels(device).expect("the frame reads back");
     let at = |x: u32, y: u32| {
         let i = ((y * w + x) * 4) as usize;
         [pixels[i], pixels[i + 1], pixels[i + 2]]
@@ -632,7 +652,7 @@ fn the_phosphor_fades_on_a_clock() {
         view_formats: &[],
     });
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-    let mut phosphor = Phosphor::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+    let mut phosphor = Phosphor::new(device, wgpu::TextureFormat::Rgba8Unorm);
     let rect = Rect::new(0, 0, SIDE as i32, SIDE as i32);
     let look = PhosphorLook {
         persistence: PERSISTENCE,
@@ -653,8 +673,8 @@ fn the_phosphor_fades_on_a_clock() {
                 label: Some("phosphor"),
             });
             phosphor.accumulate(
-                &device,
-                &queue,
+                device,
+                queue,
                 &mut one,
                 &Sweep {
                     rect,
@@ -688,11 +708,11 @@ fn the_phosphor_fades_on_a_clock() {
                     multiview_mask: None,
                 })
                 .forget_lifetime();
-            phosphor.draw(&queue, &mut pass, (SIDE, SIDE), 1.0);
+            phosphor.draw(queue, &mut pass, (SIDE, SIDE), 1.0);
         }
-        let shot = Readback::record(&device, &mut encoder, &target);
+        let shot = Readback::record(device, &mut encoder, &target);
         queue.submit([encoder.finish()]);
-        let (w, _h, pixels) = shot.pixels(&device).expect("the frame reads back");
+        let (w, _h, pixels) = shot.pixels(device).expect("the frame reads back");
         // The lit row, as encoded light: the composite writes sRGB, so undo that to
         // compare two readings as amounts of light rather than as pixel values.
         let i = ((32 * w + 32) * 4) as usize;
@@ -752,7 +772,7 @@ fn a_moving_curve_leaves_a_trail() {
         view_formats: &[],
     });
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-    let mut phosphor = Phosphor::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+    let mut phosphor = Phosphor::new(device, wgpu::TextureFormat::Rgba8Unorm);
     let rect = Rect::new(0, 0, SIDE as i32, SIDE as i32);
     let look = PhosphorLook {
         persistence: 0.5,
@@ -780,8 +800,8 @@ fn a_moving_curve_leaves_a_trail() {
             label: Some("trail"),
         });
         phosphor.accumulate(
-            &device,
-            &queue,
+            device,
+            queue,
             &mut one,
             &Sweep {
                 rect,
@@ -815,11 +835,11 @@ fn a_moving_curve_leaves_a_trail() {
                 multiview_mask: None,
             })
             .forget_lifetime();
-        phosphor.draw(&queue, &mut pass, (SIDE, SIDE), 1.0);
+        phosphor.draw(queue, &mut pass, (SIDE, SIDE), 1.0);
     }
-    let shot = Readback::record(&device, &mut encoder, &target);
+    let shot = Readback::record(device, &mut encoder, &target);
     queue.submit([encoder.finish()]);
-    let (w, _h, pixels) = shot.pixels(&device).expect("the frame reads back");
+    let (w, _h, pixels) = shot.pixels(device).expect("the frame reads back");
     let column = |x: usize| pixels[(32 * w as usize + x) * 4];
 
     // Newest first: every place the curve stood, in the order it left them.
@@ -859,13 +879,13 @@ fn what_a_pane_asks_for_is_where_the_image_looks() {
         eprintln!("no GPU here; skipping the history view");
         return;
     };
-    let mut history = HistoryStore::new(&device, GRID_BINS as u32, 256);
+    let mut history = HistoryStore::new(device, GRID_BINS as u32, 256);
     let quiet = vec![f16::from_f32(-96.0); GRID_BINS];
     let loud = vec![f16::from_f32(-6.0); GRID_BINS];
     for i in 0..PUSHED {
         let levels = if i == LOUD { &loud } else { &quiet };
         history.push(
-            &queue,
+            queue,
             &RowIn {
                 index: i as u64,
                 frames: i as u64 * 800,
@@ -891,9 +911,9 @@ fn what_a_pane_asks_for_is_where_the_image_looks() {
         view_formats: &[],
     });
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-    let mut spectrogram = SpectrogramPass::new(&device, wgpu::TextureFormat::Rgba8Unorm);
-    spectrogram.bind(&device, &history);
-    spectrogram.set_palette(&queue, &palette::build_lut(PaletteKind::Magma));
+    let mut spectrogram = SpectrogramPass::new(device, wgpu::TextureFormat::Rgba8Unorm);
+    spectrogram.bind(device, &history);
+    spectrogram.set_palette(queue, &palette::build_lut(PaletteKind::Magma));
 
     // The brightest column, or `None` when the loud row is nowhere in view.
     let mut brightest = |visible_rows: f32, held: Option<u64>| {
@@ -909,7 +929,7 @@ fn what_a_pane_asks_for_is_where_the_image_looks() {
             global_range: None,
             smooth_time: false,
         }];
-        spectrogram.prepare(&queue, &history, &panes, held);
+        spectrogram.prepare(queue, &history, &panes, held);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("history view"),
         });
@@ -934,9 +954,9 @@ fn what_a_pane_asks_for_is_where_the_image_looks() {
                 .forget_lifetime();
             spectrogram.draw(&mut pass, &panes);
         }
-        let shot = Readback::record(&device, &mut encoder, &target);
+        let shot = Readback::record(device, &mut encoder, &target);
         queue.submit([encoder.finish()]);
-        let (w, _h, pixels) = shot.pixels(&device).expect("the frame reads back");
+        let (w, _h, pixels) = shot.pixels(device).expect("the frame reads back");
         let row = 4 * w as usize * 4;
         let (mut best, mut at) = (0u8, 0usize);
         for x in 0..WIDE as usize {
@@ -1010,7 +1030,7 @@ fn the_backdrop_lights_the_ground_and_rides_the_beat() {
         view_formats: &[],
     });
     let attachment = target.create_view(&wgpu::TextureViewDescriptor::default());
-    let backdrop = BackdropPass::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+    let backdrop = BackdropPass::new(device, wgpu::TextureFormat::Rgba8Unorm);
     let lut = palette::build_lut(PaletteKind::Magma);
     // Halfway round the beat, so the ring's front is well inside the picture.
     const PHASE: f64 = 0.5;
@@ -1051,11 +1071,11 @@ fn the_backdrop_lights_the_ground_and_rides_the_beat() {
                     multiview_mask: None,
                 })
                 .forget_lifetime();
-            backdrop.draw(&queue, &mut pass, view);
+            backdrop.draw(queue, &mut pass, view);
         }
-        let shot = Readback::record(&device, &mut encoder, &target);
+        let shot = Readback::record(device, &mut encoder, &target);
         queue.submit([encoder.finish()]);
-        let (w, _h, pixels) = shot.pixels(&device).expect("the frame reads back");
+        let (w, _h, pixels) = shot.pixels(device).expect("the frame reads back");
         let total: u64 = (0..SIDE as usize)
             .flat_map(|y| (0..SIDE as usize).map(move |x| (x, y)))
             .map(|(x, y)| u64::from(pixels[(y * w as usize + x) * 4]))
@@ -1138,7 +1158,7 @@ fn the_landscape_stands_where_the_history_says() {
         eprintln!("no GPU here; skipping the landscape");
         return;
     };
-    let mut history = HistoryStore::new(&device, GRID_BINS as u32, 256);
+    let mut history = HistoryStore::new(device, GRID_BINS as u32, 256);
     // Quiet everywhere but one band, whose centre wanders and whose level breathes as
     // the rows go by: a ridge that curves away from the viewer rather than a flat wall,
     // which is a landscape worth having a picture of. The newest row always has it a
@@ -1156,7 +1176,7 @@ fn the_landscape_stands_where_the_history_says() {
             *level = f16::from_f64(loud + 60.0 * across * across);
         }
         history.push(
-            &queue,
+            queue,
             &RowIn {
                 index: i as u64,
                 frames: i as u64 * 800,
@@ -1182,9 +1202,9 @@ fn the_landscape_stands_where_the_history_says() {
         view_formats: &[],
     });
     let attachment = target.create_view(&wgpu::TextureViewDescriptor::default());
-    let mut waterfall = WaterfallPass::new(&device, wgpu::TextureFormat::Rgba8Unorm);
-    waterfall.bind(&device, &history);
-    waterfall.set_palette(&queue, &palette::build_lut(PaletteKind::Magma));
+    let mut waterfall = WaterfallPass::new(device, wgpu::TextureFormat::Rgba8Unorm);
+    waterfall.bind(device, &history);
+    waterfall.set_palette(queue, &palette::build_lut(PaletteKind::Magma));
 
     // The brightest pixel, where it is, and how much of the picture is lit at all.
     let mut render = |camera: Camera, channel: u32| {
@@ -1213,8 +1233,8 @@ fn the_landscape_stands_where_the_history_says() {
             })
             .forget_lifetime();
         waterfall.draw(
-            &device,
-            &queue,
+            device,
+            queue,
             &mut encoder,
             waterfall::Target {
                 view: &attachment,
@@ -1237,9 +1257,9 @@ fn the_landscape_stands_where_the_history_says() {
                 background: Rgba::argb(255, 0, 0, 0),
             },
         );
-        let shot = Readback::record(&device, &mut encoder, &target);
+        let shot = Readback::record(device, &mut encoder, &target);
         queue.submit([encoder.finish()]);
-        let (w, _h, pixels) = shot.pixels(&device).expect("the frame reads back");
+        let (w, _h, pixels) = shot.pixels(device).expect("the frame reads back");
         let mut best = (0u32, 0usize, 0usize);
         let mut lit = 0usize;
         for y in 0..TALL as usize {
@@ -1300,7 +1320,7 @@ fn the_landscape_stands_where_the_history_says() {
     // And a picture of the first one, so a change to the mesh, the light or the fog that
     // leaves the ridge where it is still has to be looked at rather than slipping
     // through the checks above.
-    compare_to_golden("landscape", &adapter, software, (WIDE, TALL), &shot);
+    compare_to_golden("landscape", adapter, software, (WIDE, TALL), &shot);
 }
 
 #[test]
@@ -1309,7 +1329,7 @@ fn the_scene_renders_as_it_did() {
         eprintln!("no GPU here; skipping the golden render");
         return;
     };
-    let (width, height, pixels) = render(&device, &queue);
+    let (width, height, pixels) = render(device, queue);
     assert_eq!((width, height), (WIDTH, HEIGHT));
     // Every pass drew something: a blank or single-colour frame means one silently did
     // nothing.
@@ -1322,7 +1342,7 @@ fn the_scene_renders_as_it_did() {
     };
     assert!(distinct > 200, "the frame has only {distinct} colours");
 
-    compare_to_golden("scene", &adapter, software, (width, height), &pixels);
+    compare_to_golden("scene", adapter, software, (width, height), &pixels);
 }
 
 /// Checks a render against the golden for this renderer, or writes it out to be adopted
