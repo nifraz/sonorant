@@ -86,9 +86,27 @@ fn apps() -> i32 {
     0
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 fn apps() -> i32 {
-    say("Listing apps needs the PipeWire backend, which isn't built here yet.");
+    let apps = sonorant_platform::linux::audio_apps();
+    if apps.is_empty() {
+        say("No app is playing through PipeWire.");
+    }
+    // The serial is what `--app` matches on, and what the menu's capture list uses, so
+    // it is printed beside the name rather than the process id alone: a player with no
+    // process id of its own still has one of these.
+    for a in apps {
+        match a.pid {
+            Some(pid) => say(&format!("{:>7}  {:>7}  {}", a.serial, pid, a.name)),
+            None => say(&format!("{:>7}  {:>7}  {}", a.serial, "-", a.name)),
+        }
+    }
+    0
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn apps() -> i32 {
+    say("Listing apps needs a capture backend, which this platform hasn't got.");
     1
 }
 
