@@ -298,6 +298,24 @@ top corners.
 - [x] **The help window and the name dialog.** Help is the menu tree flattened, searched
   by path, help line or key, and clicking an entry performs it. The name dialog saves the
   settings as a preset of your own; the button says "Replace" when the name is taken.
+- [x] **The menu stays open while it is used**, which is how a settings panel has to
+  behave and is not what it did. egui's default for a menu is to close on any click at
+  all, so ticking a box put the whole thing away and the next switch needed another
+  right-click; the fix is one line at the popup, which a submenu inherits. What closes
+  it now is what takes over from it: help, a preset dialog, quitting, a click outside,
+  `Esc`, and a `Close menu` item of its own at the foot. `Action::closes_menu` says
+  which, in the model, with a test naming every item that does. `Quit` was reworded
+  `Quit Sonorant`, because "Close" now means the menu. **`Esc` takes one thing off at a
+  time:** the menu, then help, then fullscreen. egui closes a popup on `Esc` without
+  marking the key used, so before this one press put the menu away *and* left
+  fullscreen.
+- [x] **Help reads as a settings sheet, not a list of names.** Rows are grouped under
+  the submenu they live in, each carries the state it is in (a switch's tick, a choice's
+  dot, drawn by egui rather than written as a character, because the fonts egui bundles
+  have no filled dot and it came out as an empty box), the keys are listed together at
+  the top, what matched is picked out in the row, and the arrows, `Enter` and `Esc`
+  drive it without touching the mouse. Searching a key now matches part of it, which is
+  the one thing about the window that searching didn't reach.
 - [x] **Presets:** the eight built-in ones and the user's own, loaded, saved and deleted
   from the menu. Changing anything marks the settings `Custom`, so the list stops
   claiming a preset the settings have moved away from.

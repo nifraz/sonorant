@@ -83,8 +83,13 @@ cargo run --release -- apps                   # the apps that can be captured al
 ```
 
 Right-click for the menu: presets, what is captured, and every setting, each with its
-key alongside it and a line saying what it does. **F1** opens the same list as a
-searchable window, and clicking an entry there does it.
+key alongside it and a line saying what it does. It stays open while you use it, so a
+switch takes effect in the picture behind it and the next one can be tried against the
+last; `Esc`, a click outside or `Close menu` at the foot of it puts it away.
+
+**F1** opens the same list as a window you can search, grouped under the submenu each
+command lives in, with every switch's state beside it and the keys gathered at the top.
+Clicking a row does the thing; so do the arrow keys and `Enter`, and `Esc` closes it.
 
 | Key | |
 |---|---|

@@ -68,6 +68,9 @@ pub struct Shell {
     pub session: Session,
     /// What the help window's search box holds.
     query: String,
+    /// Which row of the help window the keyboard is on, counted over the list as it is
+    /// filtered. Clamped to what is showing, because the filter changes under it.
+    picked: usize,
     /// The name dialog while it is open: the name typed, and why it can't be used yet.
     naming: Option<(String, Option<String>)>,
     /// Set when the help window opens, so the search box takes the focus once.
@@ -139,31 +142,55 @@ impl Shell {
                 area.clicked = response.clicked() && area.dragged.is_none();
                 area.menu_open = response.context_menu_opened();
                 describe(ui.ctx(), &response, what.reading);
-                response.context_menu(|ui| {
-                    let items = menu::tree(&Context {
-                        settings,
-                        session: &self.session,
-                        players: what.players,
-                        presets: what.presets,
-                        controls: what.controls,
-                        presentations: what.presentations,
-                        reported_delay_ms: what.reported_delay_ms,
+                // The menu stays up while it is being used. egui's default for a menu
+                // is to close on any click at all, which put the whole thing away
+                // every time a box was ticked, so a switch could only ever be tried
+                // one at a time with a right-click in between. It is as much a
+                // settings panel as a menu: what a click changes shows in the picture
+                // behind it, and the next thing can be tried against the last. A
+                // submenu inherits this from its parent, so one line covers the tree.
+                egui::Popup::context_menu(&response)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| {
+                        let items = menu::tree(&Context {
+                            settings,
+                            session: &self.session,
+                            players: what.players,
+                            presets: what.presets,
+                            controls: what.controls,
+                            presentations: what.presentations,
+                            reported_delay_ms: what.reported_delay_ms,
+                        });
+                        draw(ui, &items, &mut chosen);
                     });
-                    draw(ui, &items, &mut chosen);
-                });
             });
         if let Some(action) = chosen {
             self.act(&action, settings);
         }
-        self.help(ui.ctx(), settings, what);
+        self.help(ui.ctx(), settings, what, area.menu_open);
         self.name_dialog(ui.ctx(), what.presets);
         area
     }
 
-    /// The help window: every command, with its key and what it does, filtered by the
-    /// search box. Clicking one performs it, so help is also a way to reach a command
-    /// whose menu you can't remember.
-    fn help(&mut self, ctx: &egui::Context, settings: &mut Settings, what: &Around<'_>) {
+    /// The help window: every command, with its key, what it does and the state it is
+    /// in.
+    ///
+    /// It is a list to act on rather than a page to read. Clicking a row does the
+    /// thing, so help is a way to reach a command whose menu you can't remember, and
+    /// the ticks and dots down the left are the live settings, so the window doubles
+    /// as a reading of how the app is set. The rows are grouped under the submenu each
+    /// command lives in, which makes "where was that?" answerable by the same shape
+    /// the menu has.
+    ///
+    /// `menu_open` keeps Escape honest: it takes one thing off at a time, and the
+    /// right-click menu is in front of this.
+    fn help(
+        &mut self,
+        ctx: &egui::Context,
+        settings: &mut Settings,
+        what: &Around<'_>,
+        menu_open: bool,
+    ) {
         if !self.session.help {
             return;
         }
@@ -178,42 +205,144 @@ impl Shell {
         });
         let mut open = true;
         let mut chosen: Option<Action> = None;
+        let mut shut = false;
+        // The name dialog wants Enter for itself, so the list lets go of the keyboard
+        // while it is up rather than answering a key meant for the box in front.
+        let driving = self.naming.is_none();
         egui::Window::new("Help")
             .open(&mut open)
-            .default_width(520.0)
+            .default_width(720.0)
+            .default_height(560.0)
             .show(ctx, |ui| {
+                // Taken before the search box is built: a text box swallows Enter and
+                // the arrows, and here they belong to the list under it.
+                let (up, down, run) = ui.input_mut(|i| {
+                    if !driving {
+                        return (false, false, false);
+                    }
+                    (
+                        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+                        i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+                    )
+                });
+                if driving && !menu_open {
+                    shut |=
+                        ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+                }
+
                 ui.horizontal(|ui| {
                     ui.label("Search");
-                    let box_ = ui.text_edit_singleline(&mut self.query);
+                    let box_ = ui.add(
+                        egui::TextEdit::singleline(&mut self.query)
+                            .desired_width(260.0)
+                            .hint_text("a name, a key or a word from the description"),
+                    );
                     // The window is opened to be typed into, but only on the frame it
                     // opens: taking the focus back every frame would trap it.
                     if std::mem::take(&mut self.focus_search) {
                         box_.request_focus();
                     }
+                    // A different list is a different first row.
+                    if box_.changed() {
+                        self.picked = 0;
+                    }
                     if ui.button("Clear").clicked() {
                         self.query.clear();
+                        self.picked = 0;
                     }
+                    ui.label(
+                        egui::RichText::new("Arrows to move, Enter to do it, Esc to close").weak(),
+                    );
                 });
                 ui.separator();
+
+                let sheet = menu::entries(&items);
+                let sheet: Vec<&menu::Entry> =
+                    sheet.iter().filter(|e| e.shortcut.is_some()).collect();
+                egui::CollapsingHeader::new(format!("Keys ({})", sheet.len()))
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        // Two pairs to a row: the list is short and wide rather than
+                        // long and thin, so it fits above the search results.
+                        egui::Grid::new("help-keys")
+                            .num_columns(4)
+                            .spacing([12.0, 4.0])
+                            .show(ui, |ui| {
+                                for pair in sheet.chunks(2) {
+                                    for entry in pair {
+                                        ui.label(chip(entry.shortcut));
+                                        ui.label(entry.leaf());
+                                    }
+                                    ui.end_row();
+                                }
+                            });
+                    });
+                ui.separator();
+
                 let found = menu::search(&items, &self.query);
+                if found.is_empty() {
+                    self.picked = 0;
+                } else {
+                    if down {
+                        self.picked += 1;
+                    }
+                    if up {
+                        self.picked = self.picked.saturating_sub(1);
+                    }
+                    self.picked = self.picked.min(found.len() - 1);
+                }
+                if run
+                    && let Some(entry) = found.get(self.picked)
+                    && entry.enabled
+                {
+                    chosen = Some(entry.action.clone());
+                }
                 ui.label(match found.len() {
                     0 => "Nothing matches".to_owned(),
                     1 => "1 command".to_owned(),
                     n => format!("{n} commands"),
                 });
+
                 egui::ScrollArea::vertical()
-                    .max_height(420.0)
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
                         egui::Grid::new("help-grid")
-                            .num_columns(3)
+                            .num_columns(4)
                             .striped(true)
                             .show(ui, |ui| {
-                                for entry in found {
-                                    if ui.button(&entry.path).clicked() {
+                                let mut section: Option<&str> = None;
+                                for (i, entry) in found.iter().enumerate() {
+                                    if section != Some(entry.section()) {
+                                        section = Some(entry.section());
+                                        ui.label(
+                                            egui::RichText::new(entry.section()).strong().heading(),
+                                        );
+                                        ui.label("");
+                                        ui.label("");
+                                        ui.label("");
+                                        ui.end_row();
+                                    }
+                                    if mark(ui, entry).is_some_and(|r| r.clicked()) {
+                                        self.picked = i;
                                         chosen = Some(entry.action.clone());
                                     }
-                                    ui.label(entry.shortcut.unwrap_or(""));
-                                    ui.label(entry.help);
+                                    let hit = ui.add_enabled(
+                                        entry.enabled,
+                                        egui::Button::new(highlight(ui, under(entry), &self.query))
+                                            .selected(i == self.picked),
+                                    );
+                                    // The keyboard's row is brought into view as it
+                                    // moves, or moving past the fold would lose it.
+                                    if i == self.picked && (up || down) {
+                                        hit.scroll_to_me(None);
+                                    }
+                                    if hit.clicked() {
+                                        self.picked = i;
+                                        chosen = Some(entry.action.clone());
+                                    }
+                                    ui.label(chip(entry.shortcut));
+                                    ui.label(highlight(ui, entry.help, &self.query));
                                     ui.end_row();
                                 }
                             });
@@ -221,8 +350,10 @@ impl Shell {
             });
         if let Some(action) = chosen {
             self.act(&action, settings);
+            // The row's tick is drawn from the model, which has only now moved.
+            ctx.request_repaint();
         }
-        if !open {
+        if !open || shut {
             self.session.help = false;
         }
     }
@@ -339,7 +470,7 @@ fn draw(ui: &mut egui::Ui, items: &[Item], chosen: &mut Option<Action>) {
                     .on_hover_text(item.help);
                 if hit.clicked() {
                     *chosen = Some(action.clone());
-                    ui.close();
+                    took(ui, action);
                 }
             }
             Kind::Check(action, on) => {
@@ -351,6 +482,7 @@ fn draw(ui: &mut egui::Ui, items: &[Item], chosen: &mut Option<Action>) {
                     .on_hover_text(item.help);
                 if hit.clicked() {
                     *chosen = Some(action.clone());
+                    took(ui, action);
                 }
             }
             Kind::Radio(action, selected) => {
@@ -359,10 +491,103 @@ fn draw(ui: &mut egui::Ui, items: &[Item], chosen: &mut Option<Action>) {
                     .on_hover_text(item.help);
                 if hit.clicked() {
                     *chosen = Some(action.clone());
+                    took(ui, action);
                 }
             }
         }
     }
+}
+
+/// A help row's label: everything below the heading it is grouped under, so a command
+/// two levels down still says which level it is on.
+fn under(entry: &menu::Entry) -> &str {
+    match entry.path.split_once(" > ") {
+        Some((_, rest)) => rest,
+        None => entry.path.as_str(),
+    }
+}
+
+/// The state of a switch or a choice, down the left of the help list: the same box or
+/// dot the menu draws, so the two read alike.
+///
+/// Drawn by egui rather than written as a character. Written, a filled dot came out as
+/// an empty box on this machine: the fonts egui bundles have no glyph for it, and a
+/// list of settings whose "on" mark is a missing-glyph box is worse than no mark.
+/// Clicking one does what clicking the row does, so there is nothing here that looks
+/// like a second, disagreeing switch.
+fn mark(ui: &mut egui::Ui, entry: &menu::Entry) -> Option<egui::Response> {
+    match entry.kind {
+        menu::EntryKind::Command => {
+            ui.label("");
+            None
+        }
+        menu::EntryKind::Check(on) => {
+            let mut shown = on;
+            Some(ui.add_enabled(entry.enabled, egui::Checkbox::without_text(&mut shown)))
+        }
+        menu::EntryKind::Radio(chosen) => {
+            Some(ui.add_enabled(entry.enabled, egui::RadioButton::new(chosen, "")))
+        }
+    }
+}
+
+/// A key as a chip, or a dash where a command has no key.
+fn chip(shortcut: Option<&str>) -> egui::RichText {
+    match shortcut {
+        Some(key) => egui::RichText::new(key).monospace().strong(),
+        None => egui::RichText::new("—").weak(),
+    }
+}
+
+/// `text` with every occurrence of `query` picked out, so a row says why it matched.
+///
+/// Matched by ASCII case alone, which is both what the search does and what keeps the
+/// byte offsets of the lowercased copy the same as the original's.
+fn highlight(ui: &egui::Ui, text: &str, query: &str) -> egui::text::LayoutJob {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let plain = egui::TextFormat {
+        font_id: font.clone(),
+        color: ui.visuals().text_color(),
+        ..Default::default()
+    };
+    let lit = egui::TextFormat {
+        font_id: font,
+        color: ui.visuals().strong_text_color(),
+        background: ui.visuals().selection.bg_fill.gamma_multiply(0.45),
+        ..Default::default()
+    };
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = f32::INFINITY;
+    let needle = query.trim().to_ascii_lowercase();
+    if needle.is_empty() {
+        job.append(text, 0.0, plain);
+        return job;
+    }
+    let hay = text.to_ascii_lowercase();
+    let mut at = 0;
+    while let Some(found) = hay[at..].find(&needle) {
+        let from = at + found;
+        let to = from + needle.len();
+        job.append(&text[at..from], 0.0, plain.clone());
+        job.append(&text[from..to], 0.0, lit.clone());
+        at = to;
+    }
+    job.append(&text[at..], 0.0, plain);
+    job
+}
+
+/// What happens to the menu itself once an item has been chosen.
+///
+/// [`Action::closes_menu`] decides, and `ui.close()` closes the whole tree from
+/// wherever in it the item was, so a command in a submenu puts the lot away. The
+/// repaint is asked for because the change shows a frame later, when the tree is built
+/// again from the settings: without it, a click while the app is idling at ten frames
+/// a second could take a tenth of a second to appear.
+fn took(ui: &egui::Ui, action: &Action) {
+    if action.closes_menu() {
+        ui.close();
+    }
+    ui.ctx().request_repaint();
 }
 
 /// An item's label, with its key pushed out to the right edge.

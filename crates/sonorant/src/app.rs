@@ -1969,6 +1969,19 @@ impl Running {
         let Some(name) = crate::ui::key_name(key) else {
             return;
         };
+        // Esc takes one thing off at a time, nearest first: the menu, then the help
+        // window, then fullscreen. Both of those are closed by the UI itself when it
+        // sees the key, and egui does not mark Esc as consumed, so without this one
+        // press would put the menu away and leave fullscreen in the same breath.
+        if name == "Esc" && (self.menu_open || self.shell.session.help) {
+            // The menu closes itself, because egui takes Escape for its own popup. The
+            // help window doesn't, so it is closed here.
+            if !self.menu_open {
+                self.shell.session.help = false;
+            }
+            self.window.request_redraw();
+            return;
+        }
         let players = self.now_playing.players().to_vec();
         let presentations: Vec<Presentation> = self
             .gpu

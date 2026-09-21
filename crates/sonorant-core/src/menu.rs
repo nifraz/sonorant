@@ -258,7 +258,31 @@ pub enum Action {
     SetPresentation(Presentation),
     /// Ask the player to do something.
     Send(Transport),
+    /// Put the right-click menu away. It does nothing else: the menu is a thing the UI
+    /// holds open, so closing it is the UI's to do, and this is the item that asks.
+    CloseMenu,
     Quit,
+}
+
+impl Action {
+    /// Whether choosing this in the right-click menu should put the menu away.
+    ///
+    /// The menu is as much a settings panel as a menu: a switch, a palette or a step of
+    /// a number leaves it open, so the next thing can be tried against what the last
+    /// one did, and the picture changes behind it while it stands there. What closes it
+    /// is what takes over from it: a window that would otherwise open behind the menu,
+    /// a dialog waiting to be answered, and the two ways out.
+    pub fn closes_menu(&self) -> bool {
+        matches!(
+            self,
+            Action::Help
+                | Action::SavePreset
+                | Action::LoadPreset(_)
+                | Action::DeletePreset(_)
+                | Action::CloseMenu
+                | Action::Quit
+        )
+    }
 }
 
 /// Something the app has to carry out, because the model cannot reach the settings
@@ -586,7 +610,16 @@ pub fn tree(ctx: &Context<'_>) -> Vec<Item> {
             "Put everything back to its default",
             Action::ResetSettings,
         ),
-        Item::command("Quit", "Close Sonorant", Action::Quit),
+        Item::command("Quit Sonorant", "Stop the program", Action::Quit),
+        Item::separator(),
+        // Last, on its own, because it is the way out of the menu rather than another
+        // thing the menu does. Esc does the same; it carries no key here because Esc
+        // already belongs to leaving fullscreen, and a key answers to one item.
+        Item::command(
+            "Close menu",
+            "Put the menu away. Esc does the same, as does clicking outside it",
+            Action::CloseMenu,
+        ),
     ]
 }
 
@@ -1551,6 +1584,8 @@ pub fn apply(action: &Action, s: &mut Settings, session: &mut Session) -> Option
             session.command = Some(*t);
             touched = false;
         }
+        // Nothing to apply: the UI closes its own popup when it sees this go past.
+        Action::CloseMenu => touched = false,
         Action::Quit => {
             session.quit = true;
             touched = false;
@@ -1603,6 +1638,17 @@ fn find_key(items: &[Item], key: &str) -> Option<Action> {
     None
 }
 
+/// What an entry does, so help can show the state beside it rather than only the name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EntryKind {
+    /// Something that happens once.
+    Command,
+    /// A switch, and whether it is on.
+    Check(bool),
+    /// One of a set, and whether it is the one chosen.
+    Radio(bool),
+}
+
 /// One command as the help window lists it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
@@ -1611,6 +1657,34 @@ pub struct Entry {
     pub help: &'static str,
     pub shortcut: Option<&'static str>,
     pub action: Action,
+    /// What it is, and the state it is in. Help shows a switch as on or off and a
+    /// choice as chosen or not, which makes the window a reading of the settings as
+    /// well as a list of what can be done to them.
+    pub kind: EntryKind,
+    /// Greyed out in the menu, so greyed out here, and its key does nothing.
+    pub enabled: bool,
+}
+
+/// The top-level items, which belong to no submenu, grouped under this heading.
+pub const GENERAL: &str = "General";
+
+impl Entry {
+    /// The submenu it sits in, as a heading: "Graph" for "Graph > Peak trace", and
+    /// [`GENERAL`] for an item at the top of the menu.
+    pub fn section(&self) -> &str {
+        match self.path.split_once(" > ") {
+            Some((section, _)) => section,
+            None => GENERAL,
+        }
+    }
+
+    /// Its own label, without the path that leads to it.
+    pub fn leaf(&self) -> &str {
+        match self.path.rsplit_once(" > ") {
+            Some((_, leaf)) => leaf,
+            None => self.path.as_str(),
+        }
+    }
 }
 
 /// Every command in the tree, with the path that leads to it.
@@ -1643,6 +1717,12 @@ fn walk(items: &[Item], prefix: &str, out: &mut Vec<Entry>) {
                     help: item.help,
                     shortcut: item.shortcut,
                     action: a.clone(),
+                    kind: match &item.kind {
+                        Kind::Check(_, on) => EntryKind::Check(*on),
+                        Kind::Radio(_, chosen) => EntryKind::Radio(*chosen),
+                        _ => EntryKind::Command,
+                    },
+                    enabled: item.enabled,
                 });
             }
         }
@@ -1651,6 +1731,10 @@ fn walk(items: &[Item], prefix: &str, out: &mut Vec<Entry>) {
 
 /// The commands whose path, help or key matches `query`, in the order they appear in the
 /// menu. An empty query is everything.
+///
+/// The key is matched the same way as the rest, by part rather than whole: "f1" finds
+/// help, and so does "f". Matching a key only when the whole of it was typed made the
+/// key column the one part of the window that searching didn't reach.
 pub fn search(items: &[Item], query: &str) -> Vec<Entry> {
     let q = query.trim().to_lowercase();
     entries(items)
@@ -1659,7 +1743,7 @@ pub fn search(items: &[Item], query: &str) -> Vec<Entry> {
             q.is_empty()
                 || e.path.to_lowercase().contains(&q)
                 || e.help.to_lowercase().contains(&q)
-                || e.shortcut.is_some_and(|k| k.to_lowercase() == q)
+                || e.shortcut.is_some_and(|k| k.to_lowercase().contains(&q))
         })
         .collect()
 }
@@ -1818,6 +1902,143 @@ mod tests {
             .collect();
         assert_eq!(chosen.len(), 1);
         assert_eq!(chosen[0].label, PaletteKind::Turbo.display_name());
+    }
+
+    #[test]
+    fn a_setting_leaves_the_menu_open_and_a_window_closes_it() {
+        let s = Settings::default();
+        let session = Session::default();
+        let items = tree(&context(&s, &session));
+
+        // Everything in the whole tree that closes the menu, and nothing else: a
+        // dialog to answer, a window that would open behind it, and the ways out. The
+        // two preset placeholders are the greyed-out "nothing here yet" items.
+        let closing: Vec<String> = entries(&items)
+            .iter()
+            .filter(|e| e.action.closes_menu())
+            .map(|e| e.leaf().to_owned())
+            .collect();
+        assert_eq!(
+            closing,
+            [
+                "No saved presets",
+                "Save these settings...",
+                "Nothing saved",
+                "Help",
+                "Quit Sonorant",
+                "Close menu",
+            ]
+        );
+
+        // A switch, a choice and a step all stay: the picture changes behind a menu
+        // that is still standing, which is the point of them staying.
+        for action in [
+            Action::Toggle(Flag::ShowGrid),
+            Action::Choose(Choice::Palette(PaletteKind::Turbo)),
+            Action::Step(Number::BarSize, 1.0),
+            Action::NextPalette,
+            Action::GoLive,
+            Action::ResetSettings,
+            Action::SetCapture(Capture::WholeSystem),
+        ] {
+            assert!(!action.closes_menu(), "{action:?}");
+        }
+    }
+
+    #[test]
+    fn the_way_out_of_the_menu_is_its_own_item() {
+        let s = Settings::default();
+        let session = Session::default();
+        let items = tree(&context(&s, &session));
+        let last = items.last().expect("a last item");
+        assert_eq!(last.label, "Close menu");
+        assert_eq!(last.action(), Some(&Action::CloseMenu));
+        // It is not the same item as quitting, and neither is worded as the other.
+        let quit = items
+            .iter()
+            .find(|i| i.action() == Some(&Action::Quit))
+            .expect("quit");
+        assert_eq!(quit.label, "Quit Sonorant");
+        assert!(!quit.help.contains("Close"), "{}", quit.help);
+
+        // Closing the menu is the UI's doing, so the model changes nothing for it.
+        let mut settings = Settings::default();
+        let mut session = Session::default();
+        let before = (settings.clone(), session.clone());
+        assert_eq!(apply(&Action::CloseMenu, &mut settings, &mut session), None);
+        assert_eq!((settings, session), before);
+
+        // And Esc still belongs to leaving fullscreen: the new item carries no key, so
+        // nothing was taken from the one that had it.
+        let full = Session {
+            fullscreen: true,
+            ..Session::default()
+        };
+        let s = Settings::default();
+        assert_eq!(
+            action_for_key(&context(&s, &full), "Esc"),
+            Some(Action::LeaveFullscreen)
+        );
+    }
+
+    #[test]
+    fn help_entries_carry_their_state_and_where_they_live() {
+        let s = Settings {
+            show_grid: true,
+            palette: PaletteKind::Turbo,
+            ..Settings::default()
+        };
+        let session = Session::default();
+        let items = tree(&context(&s, &session));
+        let found = entries(&items);
+
+        let grid = found
+            .iter()
+            .find(|e| e.path == "Axes and labels > Grid")
+            .expect("the grid switch");
+        assert_eq!(grid.kind, EntryKind::Check(true));
+        assert_eq!(grid.section(), "Axes and labels");
+        assert_eq!(grid.leaf(), "Grid");
+        assert!(grid.enabled);
+
+        // The palette in use is the chosen one, and the others are not.
+        let palettes: Vec<&Entry> = found
+            .iter()
+            .filter(|e| matches!(e.action, Action::Choose(Choice::Palette(_))))
+            .collect();
+        let chosen: Vec<&str> = palettes
+            .iter()
+            .filter(|e| e.kind == EntryKind::Radio(true))
+            .map(|e| e.leaf())
+            .collect();
+        assert_eq!(chosen, [PaletteKind::Turbo.display_name()]);
+        assert!(palettes.len() > 1);
+
+        // An item at the top of the menu belongs to no submenu.
+        let freeze = found
+            .iter()
+            .find(|e| e.action == Action::Freeze)
+            .expect("freeze");
+        assert_eq!(freeze.section(), GENERAL);
+        assert_eq!(freeze.leaf(), "Freeze");
+    }
+
+    #[test]
+    fn a_key_is_searched_for_by_part() {
+        let s = Settings::default();
+        let session = Session::default();
+        let items = tree(&context(&s, &session));
+        for query in ["F1", "f1", "f"] {
+            let found = search(&items, query);
+            assert!(
+                found.iter().any(|e| e.action == Action::Help),
+                "{query} found nothing with F1 on it"
+            );
+        }
+        // A greyed-out item is still listed, and says so.
+        let leave = search(&items, "Leave fullscreen");
+        assert_eq!(leave.len(), 1);
+        assert!(!leave[0].enabled);
     }
 
     fn flatten(items: &[Item]) -> Vec<&Item> {
