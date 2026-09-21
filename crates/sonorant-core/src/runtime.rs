@@ -150,6 +150,9 @@ pub enum Command {
     /// belongs to has stopped, and pushing into a ring nobody reads is harmless -
     /// which is what lets the source be swapped without either side waiting.
     Input(rtrb::Consumer<f32>, Arc<AtomicU64>),
+    /// Hold the analysis this many seconds behind the capture, so the picture lines up
+    /// with what the speakers are playing.
+    Delay(f64),
     Stop,
 }
 
@@ -255,6 +258,7 @@ fn run(
     commands: mpsc::Receiver<Command>,
     hop_rate: f64,
 ) {
+    let mut delay = 0.0;
     loop {
         while let Ok(cmd) = commands.try_recv() {
             match cmd {
@@ -270,10 +274,11 @@ fn run(
                     audio = ring;
                     sink.dropped_frames = dropped;
                 }
+                Command::Delay(seconds) => delay = seconds,
                 Command::Stop => return,
             }
         }
-        let available = audio.slots() & !1;
+        let available = take_now(audio.slots(), delay, engine.sample_rate());
         if available == 0 {
             thread::sleep(IDLE_SLEEP);
             continue;
@@ -286,6 +291,26 @@ fn run(
         engine.push_interleaved(b, &mut sink);
         chunk.commit_all();
     }
+}
+
+/// How many samples to read now, of `waiting`, to keep `delay` seconds of audio unread.
+///
+/// The visual delay is this and nothing more: leave the newest audio in the ring for a
+/// while and everything downstream - rows, curves, meters, the audio clock the picture
+/// scrolls by - is late together, with no second copy of anything and nothing to keep
+/// in step. Anything that instead held the picture back at the drawing end would have
+/// to hold every one of those separately, and the clock would still be telling the
+/// truth about a moment that hadn't been heard yet.
+///
+/// The count is in samples, and a stereo frame is two of them, so the hold is doubled
+/// and both ends are rounded down to a whole frame.
+fn take_now(waiting: usize, delay: f64, rate: f64) -> usize {
+    let hold = if delay > 0.0 && rate > 0.0 {
+        (delay * rate).round() as usize * 2
+    } else {
+        0
+    };
+    (waiting & !1).saturating_sub(hold) & !1
 }
 
 struct Publisher {
@@ -373,6 +398,59 @@ mod tests {
     use crate::settings::Settings;
     use std::f64::consts::PI;
     use std::time::Instant;
+
+    #[test]
+    fn a_delay_leaves_that_much_audio_unread() {
+        // No delay: everything waiting, rounded down to whole frames.
+        assert_eq!(take_now(960, 0.0, 48000.0), 960);
+        assert_eq!(take_now(961, 0.0, 48000.0), 960);
+        // 10 ms at 48 kHz is 480 frames, so 960 samples stay behind.
+        assert_eq!(take_now(4800, 0.01, 48000.0), 3840);
+        // Less waiting than the delay asks for: read nothing and let the ring fill.
+        assert_eq!(take_now(480, 0.01, 48000.0), 0);
+        assert_eq!(take_now(960, 0.01, 48000.0), 0);
+        // The hold follows the rate, not a frame count: 10 ms at 96 kHz is 960 frames.
+        assert_eq!(take_now(9600, 0.01, 96000.0), 7680);
+        // A rate that isn't known yet can't be turned into a hold.
+        assert_eq!(take_now(4800, 0.01, 0.0), 4800);
+    }
+
+    #[test]
+    fn a_delay_holds_the_analysis_back_and_letting_it_go_catches_up() {
+        let config = AnalysisConfig::from_settings(&Settings::default(), 256);
+        let (mut analysis, mut input) = Analysis::spawn(48000.0, 120.0, config);
+        let quarter: Vec<f32> = vec![0.0; 12000 * 2];
+        analysis.send(Command::Delay(0.2));
+        // Give the command time to land before any audio does.
+        thread::sleep(Duration::from_millis(20));
+        input.push_interleaved(&quarter);
+        // Settled means unchanged over five reads running, not merely over two: at
+        // nothing-yet the count is also unchanged, and that is the answer this test
+        // would most like to be given by mistake.
+        let settled = |a: &mut Analysis| {
+            let (mut was, mut still) = (u64::MAX, 0);
+            for _ in 0..200 {
+                thread::sleep(Duration::from_millis(10));
+                let now = a.latest().frames;
+                still = if now == was { still + 1 } else { 0 };
+                if still == 5 {
+                    return now;
+                }
+                was = now;
+            }
+            panic!("the analysis never settled");
+        };
+        // A quarter second in with 200 ms held back: only the first 50 ms is analysed,
+        // give or take the hop the engine stopped on.
+        let held = settled(&mut analysis);
+        assert!(
+            (400..4000).contains(&held),
+            "{held} frames analysed, wanted about 2400"
+        );
+        // Letting go hands over what was waiting, and it all arrives.
+        analysis.send(Command::Delay(0.0));
+        assert_eq!(settled(&mut analysis), 12000);
+    }
 
     #[test]
     fn audio_in_rows_and_state_out() {

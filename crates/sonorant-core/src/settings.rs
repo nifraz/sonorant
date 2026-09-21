@@ -385,6 +385,21 @@ pub struct Settings {
     /// gigabyte. The app logs the reach it settled on.
     pub history_minutes: i32,
 
+    /// How long the picture is held back so it lines up with what the speakers are
+    /// playing, in milliseconds.
+    ///
+    /// Capture taps the mix before it reaches the hardware, so without this the
+    /// visuals run ahead of the sound by whatever the output path costs. Holding the
+    /// analysis back by that much is the only honest fix: slowing the picture down
+    /// would change the scroll speed, and running it forward is not possible.
+    pub visual_delay_ms: i32,
+    /// Take the offset from the system where it reports the sink's latency.
+    ///
+    /// PipeWire does, so on Ubuntu the figure fills itself in and follows the sink:
+    /// plugging in Bluetooth headphones moves it by a couple of hundred milliseconds.
+    /// Nothing reports it on Windows yet, so there the offset stays where it is put.
+    pub auto_visual_delay: bool,
+
     // Fullscreen and immersion.
     pub gutter_width: i32,
     pub show_waveform: bool,
@@ -487,6 +502,8 @@ impl Default for Settings {
             led_segment: 5,
             contrast: 0.25,
             history_minutes: 5,
+            visual_delay_ms: 0,
+            auto_visual_delay: true,
             gutter_width: 34,
             show_waveform: true,
             immersive: false,
@@ -521,6 +538,17 @@ impl Settings {
     pub fn effective_rows_per_second(&self) -> f64 {
         let rps = self.rows_per_second.max(0.0);
         if self.imm_cinematic { rps / 4.0 } else { rps }
+    }
+
+    /// How long the picture is held back, in seconds, inside the range the setting
+    /// allows however the number got there.
+    ///
+    /// A file or a preset from elsewhere can carry any figure at all, and the number
+    /// this returns is handed to the analysis thread, so it is clamped here rather
+    /// than trusted.
+    pub fn visual_delay_seconds(&self) -> f64 {
+        let r = Number::VisualDelayMs.range();
+        f64::from(self.visual_delay_ms).clamp(r.min, r.max) / 1000.0
     }
 
     /// Applies a built-in preset over the current settings. Only the fields a preset is
@@ -707,6 +735,7 @@ named_enum! {
         BeatReactive = "BeatReactive",
         ColourFollows = "ColourFollows",
         Cinematic = "Cinematic",
+        AutoVisualDelay = "AutoVisualDelay",
     } default ShowGrid
 }
 
@@ -737,6 +766,7 @@ named_enum! {
         PhosphorMs = "PhosphorMs",
         PhosphorIntensity = "PhosphorIntensity",
         HistoryMinutes = "HistoryMinutes",
+        VisualDelayMs = "VisualDelayMs",
     } default RowsPerSecond
 }
 
@@ -780,6 +810,10 @@ impl Number {
             Number::PhosphorMs => (60.0, 2000.0, 20.0, true, "ms"),
             Number::PhosphorIntensity => (10.0, 300.0, 10.0, true, "%"),
             Number::HistoryMinutes => (1.0, 15.0, 1.0, true, "min"),
+            // Half a second covers a Bluetooth sink, which is the worst of the paths
+            // anyone listens through; the ring the analysis reads from holds five
+            // times that, so the hold can never starve it.
+            Number::VisualDelayMs => (0.0, 500.0, 5.0, true, "ms"),
         };
         Range {
             min,
@@ -849,6 +883,7 @@ impl Settings {
             Flag::BeatReactive => self.imm_beat_reactive,
             Flag::ColourFollows => self.imm_colour_follows,
             Flag::Cinematic => self.imm_cinematic,
+            Flag::AutoVisualDelay => self.auto_visual_delay,
         }
     }
 
@@ -920,6 +955,7 @@ impl Settings {
             Flag::BeatReactive => &mut self.imm_beat_reactive,
             Flag::ColourFollows => &mut self.imm_colour_follows,
             Flag::Cinematic => &mut self.imm_cinematic,
+            Flag::AutoVisualDelay => &mut self.auto_visual_delay,
         }
     }
 
@@ -949,6 +985,7 @@ impl Settings {
             Number::PhosphorMs => f64::from(self.phosphor_ms),
             Number::PhosphorIntensity => f64::from(self.phosphor_intensity),
             Number::HistoryMinutes => f64::from(self.history_minutes),
+            Number::VisualDelayMs => f64::from(self.visual_delay_ms),
         }
     }
 
@@ -983,6 +1020,7 @@ impl Settings {
             Number::PhosphorMs => self.phosphor_ms = v as i32,
             Number::PhosphorIntensity => self.phosphor_intensity = v as i32,
             Number::HistoryMinutes => self.history_minutes = v as i32,
+            Number::VisualDelayMs => self.visual_delay_ms = v as i32,
         }
     }
 

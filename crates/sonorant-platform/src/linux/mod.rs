@@ -5,6 +5,8 @@ pub mod awake;
 pub mod mpris;
 #[cfg(feature = "capture")]
 pub mod pipewire;
+#[cfg(feature = "capture")]
+pub mod sink_delay;
 
 #[cfg(feature = "capture")]
 pub use self::pipewire::{AudioApp, PipeWireSource, Target, audio_apps};

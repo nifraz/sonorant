@@ -8,7 +8,7 @@ use sonorant_core::media::Transport;
 use sonorant_core::menu::{self, Capture, Presentation};
 use sonorant_core::palette::{self, Lut};
 use sonorant_core::runtime::PaneCurves;
-use sonorant_core::settings::{FrameCap, RenderQuality, Settings};
+use sonorant_core::settings::{FrameCap, Number, RenderQuality, Settings};
 use sonorant_core::store::{self, Store};
 use sonorant_render::{
     ArtworkPass, BackdropPass, BandLayout, BeatPhase, Camera, CurveData, CurveLook, CurvePass,
@@ -789,6 +789,7 @@ impl Running {
         } else {
             self.status.capture = "no capture".into();
         }
+        self.settle_delay();
         // Say whose sound this is when capture went looking for it: "MusicBee, 48 kHz"
         // alone doesn't tell you whether that was chosen or followed.
         if self.capture_follows
@@ -831,6 +832,7 @@ impl Running {
             presets: &self.presets,
             controls: self.now_playing.controls(),
             presentations: &presentations,
+            reported_delay_ms: self.reported_delay_ms(),
         };
         let shell = &mut self.shell;
         let settings = &mut self.settings;
@@ -1553,6 +1555,19 @@ impl Running {
         if (self.view.zoom - 1.0).abs() > 0.01 {
             line += &format!("  |  zoom {:.2}x", self.view.zoom);
         }
+        // Only when there is one: a delay of nothing is the ordinary case, and saying
+        // "0 ms behind" every frame would be a figure that never means anything.
+        if self.settings.visual_delay_ms > 0 {
+            line += &format!(
+                "  |  {} ms behind{}",
+                self.settings.visual_delay_ms,
+                if self.settings.auto_visual_delay {
+                    ", automatic"
+                } else {
+                    ""
+                }
+            );
+        }
         line
     }
 
@@ -1722,6 +1737,40 @@ impl Running {
         self.applied = self.settings.clone();
     }
 
+    /// What the system says the output path costs, in milliseconds, for the menu.
+    fn reported_delay_ms(&self) -> Option<f64> {
+        let d = self.audio.as_ref()?.reported_delay()?;
+        Some(d.as_secs_f64() * 1000.0)
+    }
+
+    /// Keeps the hold on the analysis in step with the offset, and the offset in step
+    /// with what the system reports while it is left automatic.
+    ///
+    /// The reported figure is written into the setting rather than kept beside it, so
+    /// the menu shows the number really in use, and switching automatic off leaves
+    /// that number there to be adjusted rather than dropping back to whatever was
+    /// last typed. Switching it back on takes the reported figure again at once,
+    /// which is why the setting follows the report every frame rather than only when
+    /// a new one arrives.
+    ///
+    /// It goes in through the settings directly rather than through the menu's
+    /// `apply`, because a sink changing is not the user changing a setting: it must
+    /// not switch the automatic off, and it must not turn a preset into `Custom`.
+    fn settle_delay(&mut self) {
+        let Some(audio) = &mut self.audio else { return };
+        if let Some(reported) = audio.reported_delay()
+            && self.settings.auto_visual_delay
+        {
+            let step = Number::VisualDelayMs.range().step;
+            let ms = (reported.as_secs_f64() * 1000.0 / step).round() * step;
+            if self.settings.number(Number::VisualDelayMs) != ms {
+                self.settings.set_number(Number::VisualDelayMs, ms);
+                log::info!("the visual delay follows the output: {ms:.0} ms");
+            }
+        }
+        audio.set_delay(self.settings.visual_delay_seconds());
+    }
+
     /// Tells the analysis thread what to measure, when that has changed.
     ///
     /// Everything analysis cares about is in one config, so comparing it catches a
@@ -1773,6 +1822,7 @@ impl Running {
                 presets: &self.presets,
                 controls: self.now_playing.controls(),
                 presentations: &presentations,
+                reported_delay_ms: self.reported_delay_ms(),
             },
             &name,
         );

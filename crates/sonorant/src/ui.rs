@@ -119,6 +119,7 @@ impl Shell {
                         presets: what.presets,
                         controls: what.controls,
                         presentations: what.presentations,
+                        reported_delay_ms: what.reported_delay_ms,
                     });
                     draw(ui, &items, &mut chosen);
                 });
@@ -145,6 +146,7 @@ impl Shell {
             presets: what.presets,
             controls: what.controls,
             presentations: what.presentations,
+            reported_delay_ms: what.reported_delay_ms,
         });
         let mut open = true;
         let mut chosen: Option<Action> = None;
@@ -251,6 +253,9 @@ pub struct Around<'a> {
     pub presets: &'a [String],
     pub controls: Controls,
     pub presentations: &'a [Presentation],
+    /// What the system says the output path costs, in milliseconds, where it says
+    /// anything: the figure the automatic visual delay follows.
+    pub reported_delay_ms: Option<f64>,
 }
 
 /// What the central panel left for the visuals, and what the pointer did in it.

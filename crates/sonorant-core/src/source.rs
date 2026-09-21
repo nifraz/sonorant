@@ -63,6 +63,12 @@ pub enum SourceEvent {
     Status(SourceStatus),
     /// The stream's format, sent before the first frames and again whenever it changes.
     Format(StreamFormat),
+    /// How long the sound still has to travel after capture taps it: the output
+    /// path's own delay, which is how far ahead of the speakers the picture runs.
+    ///
+    /// Sent whenever the figure really moves, which is when the output changes, not
+    /// every cycle. Only sources on a system that reports it send this at all.
+    OutputDelay(Duration),
 }
 
 /// A capture backend.

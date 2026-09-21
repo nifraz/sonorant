@@ -12,15 +12,15 @@ plan, with every decision and phase, is in [docs/plan.md](docs/plan.md).
 Early work: Phases 0 to 6 are written, so the app captures, analyses and draws the parity
 views, follows whatever is playing, runs off its own menu, and has the five visuals that
 are new here: the phosphor scope, the zoomable long history, the beat-reactive backdrop,
-the 3D waterfall and the quality setting that scales them. Phase 7, tuning and polish, is
-next. What each phase still leaves open is in [Progress](docs/plan.md#progress) in the
-plan.
+the 3D waterfall and the quality setting that scales them. Phase 7, tuning and polish, has
+begun with the visual delay, which lines the picture up with the speakers. What each phase
+still leaves open is in [Progress](docs/plan.md#progress) in the plan.
 
 | Part | State |
 |---|---|
 | `sonorant-dsp` | Verified against Nostalgia+'s reference vectors: the multi-resolution FFT bank, all six windows, mid/side and single-channel modes, BS.1770 loudness and true peak, overs, dynamic range, curve shaping and ballistics, notes, tempo and brightness |
 | `sonorant-core` | Every setting and preset, TOML settings, presets and themes, the Nostalgia+ importer, palettes, the analysis engine and thread, and a WAV source |
-| `sonorant-platform` | Windows: WASAPI loopback of the whole system or one app, and now playing from SMTC. Linux: PipeWire capture, and now playing from MPRIS, which has been seen following a real player |
+| `sonorant-platform` | Windows: WASAPI loopback of the whole system or one app, and now playing from SMTC. Linux: PipeWire capture, now playing from MPRIS, which has been seen following a real player, and the sink's own latency, which the visual delay follows |
 | `sonorant-render` | The whole picture: the pane and deck layouts, the GPU history store, the spectrogram, the curve strips, a text and shape overlay (IBM Plex, bundled) carrying the grid, scales and labels, the waveform lanes, goniometer, meters and readouts, the colour bar and status line, the floating-point target and its glow, GPU pass timing, and golden renders. The new visuals too: the phosphor screen, the beat-reactive backdrop and the 3D waterfall |
 | `sonorant` | The app: the window and the frame loop, the menu and the keyboard over one model, the searchable help, the hover readout, the quick bar and the transport, and the wheel and drag that walk back through the history or orbit the waterfall; `sonorant capture` runs the pipeline without a window |
 
@@ -97,6 +97,14 @@ most often; it can be made compact or switched off.
 The status line shows what is being captured, loudness and tempo, the frame rate, the
 99th percentile frame interval and the refreshes missed. On exit the pacing figures for
 the whole run are logged.
+
+**Visual delay.** Capture taps the mix before the hardware plays it, so without an offset
+the picture runs ahead of the sound. `Visual delay` in the menu holds it back, and on
+Ubuntu the figure fills itself in from what PipeWire says the sink costs, following it
+when the output changes. That is the graph's own cost and not the whole journey: an HDMI
+display or a Bluetooth receiver adds its own and says nothing about it, so the offset is
+there to be nudged. Setting it by hand turns the automatic off. Nothing reports it on
+Windows, where the switch is greyed out.
 
 Settings live in `%APPDATA%\Sonorant` or `~/.config/sonorant`, and are saved on exit.
 Presets you save go beside them, and the menu loads and deletes them. On the first run on

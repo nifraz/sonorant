@@ -234,6 +234,8 @@ fn every_setting_survives_a_save_and_load() {
         "history_minutes",
         "phosphor_ms",
         "phosphor_intensity",
+        "visual_delay_ms",
+        "auto_visual_delay",
     ];
     for (k, v) in a.as_object().unwrap() {
         if !no_counterpart.contains(&k.as_str()) {

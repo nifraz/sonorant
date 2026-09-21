@@ -308,6 +308,10 @@ impl LegacySettings {
             history_minutes: s.history_minutes,
             phosphor_ms: s.phosphor_ms,
             phosphor_intensity: s.phosphor_intensity,
+            // A plugin drawing inside the player had nothing to line up with: it was
+            // handed the same samples the player was about to hand the mixer.
+            visual_delay_ms: s.visual_delay_ms,
+            auto_visual_delay: s.auto_visual_delay,
         };
         LegacySettings {
             settings,

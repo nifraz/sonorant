@@ -8,6 +8,12 @@
 //! so they can share the one producer end of the analysis ring. Monitors of a suspended
 //! sink deliver nothing; the timer feeds silence for those stretches so the audio clock
 //! keeps moving.
+//!
+//! How far ahead of the speakers all this runs is reported too, as it moves, and is
+//! what fills the visual delay in by itself. The figure belongs to the sink rather than
+//! to this stream, so [`sink_delay`](super::sink_delay) is what finds it; all that is
+//! wanted from here is the graph's quantum and rate, which the stream's own clock
+//! carries, to turn it into a time.
 
 use std::cell::RefCell;
 use std::fmt;
@@ -16,6 +22,7 @@ use std::sync::mpsc::Sender;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use super::sink_delay::SinkDelay;
 use pipewire as pw;
 use pw::properties::properties;
 use pw::spa;
@@ -47,6 +54,13 @@ pub struct AudioApp {
 /// How long the monitor may go quiet before the gap is filled with silence.
 const QUIET: Duration = Duration::from_millis(40);
 const TICK: Duration = Duration::from_millis(10);
+/// How far the reported delay has to move before it is worth saying so.
+///
+/// Most of the figure is a multiple of the graph's quantum, which moves whenever a
+/// client with a different appetite comes or goes. Anything under a millisecond is
+/// below what the offset can be set to anyway, and reporting it would have the settings
+/// file rewritten for nothing.
+const DELAY_STEP: Duration = Duration::from_millis(1);
 
 pub struct PipeWireSource {
     target: Target,
@@ -122,6 +136,11 @@ struct Shared {
     quiet_fed: u64,
     stereo: Vec<f32>,
     samples: Vec<f32>,
+    /// The delay last reported, so only a real move is sent again.
+    delay: Option<Duration>,
+    /// The stream clock's ticks at the last cycle: the difference is the quantum.
+    /// `None` before there has been a last cycle to take a difference from.
+    ticks: Option<u64>,
 }
 
 fn run(
@@ -156,6 +175,9 @@ fn run(
         Target::Node { serial, .. } => props.insert(*pw::keys::TARGET_OBJECT, serial.to_string()),
     }
     let stream = pw::stream::StreamBox::new(&core, "Sonorant capture", props).map_err(failed)?;
+    // The graph is watched from this same loop, so the sink's latency and the audio
+    // arrive on one thread and need nothing to keep them in step.
+    let sinks = Rc::new(SinkDelay::watch(core.get_registry_rc().map_err(failed)?));
 
     let shared = Rc::new(RefCell::new(Shared {
         input,
@@ -168,18 +190,23 @@ fn run(
         quiet_fed: 0,
         stereo: Vec::with_capacity(8192),
         samples: Vec::with_capacity(8192),
+        delay: None,
+        ticks: None,
     }));
 
     let _listener = stream
         .add_local_listener_with_user_data(())
         .state_changed({
-            let shared = shared.clone();
-            move |_, _, _old, new| {
+            let (shared, sinks) = (shared.clone(), sinks.clone());
+            move |stream, _, _old, new| {
                 let mut s = shared.borrow_mut();
                 let status = match new {
                     pw::stream::StreamState::Streaming => {
                         s.streaming = true;
                         s.last_data = Instant::now();
+                        // The stream has a node in the graph now, which is where the
+                        // walk to the sink starts.
+                        sinks.ours_is(stream.node_id());
                         let what = match &s.target {
                             Target::WholeSystem => "Whole system".to_owned(),
                             Target::Node { name, .. } => format!("{name} only"),
@@ -231,7 +258,7 @@ fn run(
             }
         })
         .process({
-            let shared = shared.clone();
+            let (shared, sinks) = (shared.clone(), sinks.clone());
             move |stream, _| {
                 let Some(mut buffer) = stream.dequeue_buffer() else {
                     return;
@@ -258,6 +285,7 @@ fn run(
                     s.last_data = Instant::now();
                     s.quiet_fed = 0;
                 }
+                report_delay(stream, s, &sinks);
             }
         })
         .register()
@@ -316,6 +344,53 @@ fn run(
 
     mainloop.run();
     Ok(())
+}
+
+/// Tells the app how far ahead of the speakers this capture runs, when that moves.
+///
+/// The figure comes from the sink the sound is going out through, which
+/// [`SinkDelay`](super::sink_delay::SinkDelay) follows through the graph. Resolving it
+/// into a time needs the graph's quantum and rate, which the stream's own clock carries:
+/// its ticks advance by one quantum a cycle, at the rate the graph is running.
+///
+/// Called from the process callback, which the loop thread runs, so it reads what the
+/// last cycle left rather than making a round trip. The channel send is behind a step,
+/// so it happens when the output changes rather than every cycle.
+fn report_delay(stream: &pw::stream::Stream, s: &mut Shared, sinks: &SinkDelay) {
+    let Ok(time) = stream.time() else { return };
+    let rate = time.rate();
+    if rate.num == 0 || rate.denom == 0 {
+        return;
+    }
+    // A tick is `num/denom` of a second, so the graph's rate is the reciprocal, and a
+    // cycle's worth of ticks is its quantum. The first cycle has nothing to take a
+    // difference from, and counting from nought would read the clock's whole history
+    // as one enormous quantum, so it only starts the count.
+    let graph_rate = rate.denom / rate.num;
+    let quantum = s.ticks.map_or(0, |was| time.ticks().saturating_sub(was));
+    s.ticks = Some(time.ticks());
+    if quantum == 0 {
+        return;
+    }
+    let quantum = u32::try_from(quantum).unwrap_or(u32::MAX);
+    let Some(seconds) = sinks.seconds(quantum, graph_rate) else {
+        return;
+    };
+    let delay = Duration::from_secs_f64(seconds.clamp(0.0, 5.0));
+    let moved = match s.delay {
+        Some(was) => was.abs_diff(delay) >= DELAY_STEP,
+        None => true,
+    };
+    if moved {
+        s.delay = Some(delay);
+        log::debug!(
+            "the sink says {:.1} ms, at a quantum of {quantum} in {graph_rate} Hz, over \
+             {} sink(s)",
+            seconds * 1000.0,
+            sinks.sinks()
+        );
+        let _ = s.events.send(SourceEvent::OutputDelay(delay));
+    }
 }
 
 /// Apps with an audio output stream right now, by name.

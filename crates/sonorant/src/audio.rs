@@ -30,6 +30,10 @@ pub struct Audio {
     pub status: SourceStatus,
     pub sample_rate: f64,
     clock: AudioClock,
+    /// What the system last said the output path costs, where it says anything.
+    reported_delay: Option<Duration>,
+    /// The hold the analysis thread was last told to keep.
+    delay: f64,
 }
 
 impl Audio {
@@ -47,6 +51,8 @@ impl Audio {
             status: SourceStatus::Starting,
             sample_rate: rate,
             clock: AudioClock::default(),
+            reported_delay: None,
+            delay: 0.0,
         })
     }
 
@@ -76,13 +82,32 @@ impl Audio {
             self.sample_rate = rate;
             self.analysis.send(Command::SampleRate(rate));
         }
-        // Wall time and audio time have to find each other again from the new stream.
+        // Wall time and audio time have to find each other again from the new stream,
+        // and so does the delay: a different source is a different path to the
+        // speakers, and the old figure describes a stream that is no longer running.
+        // The hold itself carries over: it belongs to the analysis thread, which is
+        // the one thing here that isn't replaced, and the settings still ask for it.
         self.clock = AudioClock::default();
+        self.reported_delay = None;
         Ok(())
     }
 
     pub fn set_config(&self, config: AnalysisConfig) {
         self.analysis.send(Command::Config(config));
+    }
+
+    /// Holds the analysis `seconds` behind capture, so the picture lines up with what
+    /// the speakers are playing. Sent only when it changes.
+    pub fn set_delay(&mut self, seconds: f64) {
+        if seconds != self.delay {
+            self.delay = seconds;
+            self.analysis.send(Command::Delay(seconds));
+        }
+    }
+
+    /// What the system says the output path costs, where it says anything at all.
+    pub fn reported_delay(&self) -> Option<Duration> {
+        self.reported_delay
     }
 
     /// A new track started: the programme measures - integrated loudness, range, BPM
@@ -110,6 +135,10 @@ impl Audio {
                 SourceEvent::Status(s) => {
                     log::info!("capture: {s}");
                     self.status = s;
+                }
+                SourceEvent::OutputDelay(d) => {
+                    log::info!("output delay: {:.1} ms", d.as_secs_f64() * 1000.0);
+                    self.reported_delay = Some(d);
                 }
             }
         }

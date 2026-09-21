@@ -65,8 +65,10 @@ Phase 6 is written: the phosphor scope, the zoomable long history, the beat-reac
 backdrop, the 3D waterfall and the quality setting are all in, and what is left of its
 gate is one measurement Phase 7 owns. A Linux machine has now built and run the app, so
 the PipeWire capture compiles for the first time, lavapipe has goldens of its own, and
-Phase 4's now-playing half has been seen following a real player. Phase 7 begins at
-[Next](#next).
+Phase 4's now-playing half has been seen following a real player. Phase 7 has begun:
+the visual delay is in, and lines the picture up with the speakers by holding the
+analysis back, with the offset filling itself in from what PipeWire says the sink
+costs. What is left of Phase 7 is at [Next](#next).
 
 **Phase 0 (repository, CI, skeleton): done, except clean frame pacing and CI**
 
@@ -397,9 +399,53 @@ itself, not a picture of everything at once: the backdrop's own test renders it 
 finds the ring where the phase says it should be, and checks the light is behind the
 front rather than ahead of it.
 
+**Phase 7 (tuning and polish): the visual delay is in; the rest is open**
+
+- [x] **The visual delay.** Capture taps the mix before the hardware plays it, so the
+  picture runs early by whatever the output path costs. The offset that fixes it is a
+  setting, 0 to 500 ms, and holding the picture back is done in one place: the analysis
+  thread leaves that much audio unread in the capture ring
+  (`runtime::take_now`). Everything downstream is then late together, rows and curves
+  and meters and the audio clock the picture scrolls by, with no second copy of
+  anything and nothing to keep in step. Holding it back at the drawing end would have
+  meant a delay line for each of those, and a clock still telling the truth about a
+  moment nobody had heard yet.
+- [x] **It fills itself in on Ubuntu** (`platform/linux/sink_delay.rs`). Every PipeWire
+  sink publishes a `Latency` parameter, and the entry for its input side is how long
+  after a player hands over a buffer the sound is heard. Finding which sink is a walk
+  through the graph from our own capture node: a monitor capture is linked straight to
+  the sink, and capturing one app taps that app's stream, which puts the sink one hop
+  further on. Both are watched as links come and go, because the sink changes when
+  headphones are plugged in. What comes back is quanta, samples and nanoseconds rather
+  than a time, so the quantum is resolved against the graph as it is running, which the
+  stream's own clock gives: its ticks advance by one quantum a cycle.
+  - The figure is written into the setting rather than kept beside it, so the menu
+    shows the number really in use and turning the automatic off leaves it there to be
+    adjusted. Setting it by hand turns the automatic off, because a switch that undoes
+    what the item beside it just did is worse than no switch.
+  - Measured here: 5.8 ms on internal speakers, at a quantum of 256. **It is the
+    graph's cost, not the whole journey.** An HDMI display or a Bluetooth receiver adds
+    its own and nothing on the wire says how much, so the automatic figure is a floor
+    and the offset is there to be nudged. Nothing reports it on Windows, where the
+    switch is greyed out and says so.
+- [ ] Frame pacing on 60, 144 and 240 Hz and on variable refresh. Mailbox presentation
+  is already a setting, and the surface's modes decide which of the three the menu
+  offers.
+- [ ] Latency end to end, power, the accessibility pass, and the weak-GPU checks.
+- [ ] The offscreen 1440p GPU measurement Phase 6's gate is waiting on.
+
+**A crash in the goldens, found here and fixed here.** The golden tests opened a Vulkan
+instance apiece, and seven of them at once segfaults inside Mesa's software renderer
+about three runs in twenty, with nothing of ours on the stack. Serially it never
+happens: 20 runs clean against 3 failures in 20 parallel. They now share one device
+behind a `OnceLock`, which is both the fix and quicker, and a device is safe to use from
+several threads at once. 40 runs clean since. Worth knowing before CI first runs on an
+Ubuntu runner, where this would have looked like a flaky test rather than a driver
+being asked to do something it does badly.
+
 ### Next
 
-Phase 7: pacing on other refresh rates, latency end to end, power, the visual delay, a
+Phase 7's remaining half: pacing on other refresh rates, latency end to end, power, a
 pass with Orca and Narrator, and the weak-GPU checks. Before or alongside it, the things
 that still need a machine this one isn't: the first CI run, the players Phase 4 has not
 seen, and the scaling checks in Phase 5.
@@ -453,13 +499,21 @@ scroll speed it started with, so changing the speed changes how far back it reac
 | Whole hop at 120 hops per second, Balanced (engine, per hop) | 1.18 ms | **Met:** median 0.37 ms, mean 0.48 ms, minimum 0.20 ms | Under 0.5 ms |
 | Display projection, 1,080 columns / history grid, 2,048 bins | 0.32 / 0.59 ms | 0.03-0.07 / 0.06-0.14 ms | |
 | Frame pacing, 59.94 Hz panel, GeForce 840M on Direct3D 12, windowed, 40 s | 8% "missed" (counted per interval), stalls of 0.5 s | 59.6 fps, 11 of 2,205 refreshes missed (0.5%); one 0.5 s stall in five runs, blocked in the swapchain | No dropped frames in steady state |
-| First frame, release build | 4.3 s | 1.1-2.7 s, of which opening the GPU is 0.8-1.9 s | Under 300 ms |
+| First frame, release build, GeForce 840M | 4.3 s | 1.1-2.7 s, of which opening the GPU is 0.8-1.9 s | Under 300 ms |
+| First frame, release build, Iris Xe on Vulkan | not measured | **Met:** 128 ms (window 17, GPU 47, renderer 9, first frame 52) | Under 300 ms |
 | GPU time a frame, 1920x1080 fullscreen, GeForce 840M | not measured | 2.9 ms (visuals 1.0, composite 0.8, furniture 1.0); 3.3 ms with the glow | Under 3 ms at 2560x1440, under 6 ms with every new visual |
 | Release binary (Windows, GNU toolchain) | 14.2 MB | 16.9 MB; 7.1 MB zipped | Under 15 MB download |
 
 The GPU figures are from the 840M at 1920x1080, which is what this machine's screen
 allows; 2560x1440 has to be timed offscreen, which is a Phase 7 job. A fullscreen run
 with the glow on held 59.9 fps over 687 frames with no missed refreshes.
+
+Start-up meets its target on the Ubuntu machine and not on the Windows one, and the
+difference is all in opening the GPU: 47 ms for Vulkan on an always-on Iris Xe against
+0.8 to 1.9 s for Direct3D 12 waking a GeForce 840M out of Optimus power-off. Nothing in
+the app changed between the two figures, which is worth saying plainly: the 300 ms is
+reachable, and what stands in its way on the older machine is a discrete GPU that has
+to be woken.
 
 The CPU is the i7-4510U, a 2014 laptop part, and these figures were taken on battery
 with 40-50% of the CPU busy elsewhere, so the spread is wide. Start-up's floor

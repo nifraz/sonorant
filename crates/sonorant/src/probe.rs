@@ -203,6 +203,13 @@ fn capture(a: CaptureArgs) -> i32 {
                     ));
                 }
                 SourceEvent::Status(s) => say(&format!("status: {s}")),
+                // What the visual delay follows when it is left automatic. Printing it
+                // is the headless way to see what a machine reports, on a machine that
+                // has no window.
+                SourceEvent::OutputDelay(d) => {
+                    say(&format!("output delay: {:.1} ms", d.as_secs_f64() * 1000.0));
+                    analysis.send(sonorant_core::runtime::Command::Delay(d.as_secs_f64()));
+                }
             }
         }
         analysis.take_rows(|_| rows += 1);

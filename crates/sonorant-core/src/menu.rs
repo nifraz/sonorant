@@ -312,6 +312,9 @@ pub struct Context<'a> {
     pub controls: Controls,
     /// The presentation modes this GPU and surface offer.
     pub presentations: &'a [Presentation],
+    /// What the system says the sound still has to travel after capture taps it, in
+    /// milliseconds, where it says anything at all.
+    pub reported_delay_ms: Option<f64>,
 }
 
 /// What an item is.
@@ -559,6 +562,11 @@ pub fn tree(ctx: &Context<'_>) -> Vec<Item> {
                 ),
             ],
         ),
+        Item::submenu(
+            "Visual delay",
+            "Hold the picture back so it lines up with what you hear",
+            visual_delay(ctx),
+        ),
         Item::check(
             "Status line",
             "The line of figures over the image",
@@ -579,6 +587,52 @@ pub fn tree(ctx: &Context<'_>) -> Vec<Item> {
             Action::ResetSettings,
         ),
         Item::command("Quit", "Close Sonorant", Action::Quit),
+    ]
+}
+
+/// The visual delay: the automatic figure where there is one, and the offsets by hand.
+///
+/// Capture taps the mix before the hardware plays it, so the picture is early by
+/// whatever the output path costs. The automatic item carries the number the system
+/// reports, because "Automatic" alone tells you nothing about whether it found
+/// anything.
+fn visual_delay(ctx: &Context<'_>) -> Vec<Item> {
+    let s = ctx.settings;
+    let automatic = match ctx.reported_delay_ms {
+        Some(ms) => Item::check(
+            format!("Automatic ({ms:.0} ms)"),
+            "Follow the delay the system reports, and keep following it when the              output changes",
+            Action::Toggle(Flag::AutoVisualDelay),
+            s.flag(Flag::AutoVisualDelay),
+        ),
+        None => Item::check(
+            "Automatic",
+            "Nothing here reports the output's delay, so the offset has to be set by              hand",
+            Action::Toggle(Flag::AutoVisualDelay),
+            s.flag(Flag::AutoVisualDelay),
+        )
+        .when(false),
+    };
+    vec![
+        automatic,
+        Item::separator(),
+        // Set by hand rather than stepped, because the way to find the right figure is
+        // to watch a drum against the picture and try another one, not to creep up on
+        // it a step at a time.
+        sizes(
+            "Offset",
+            "How long the picture is held back, so it lines up with the sound",
+            Number::VisualDelayMs,
+            &[0.0, 20.0, 40.0, 80.0, 150.0, 300.0],
+            |v| {
+                if v == 0.0 {
+                    "None".to_owned()
+                } else {
+                    format!("{v:.0} ms")
+                }
+            },
+            s,
+        ),
     ]
 }
 
@@ -1420,8 +1474,14 @@ pub fn apply(action: &Action, s: &mut Settings, session: &mut Session) -> Option
         Action::Toggle(f) => {
             s.toggle(*f);
         }
-        Action::Set(n, v) => s.set_number(*n, *v),
-        Action::Step(n, by) => s.step_number(*n, *by),
+        Action::Set(n, v) => {
+            s.set_number(*n, *v);
+            chose_delay_by_hand(*n, s);
+        }
+        Action::Step(n, by) => {
+            s.step_number(*n, *by);
+            chose_delay_by_hand(*n, s);
+        }
         Action::Choose(c) => c.apply(s),
         Action::NextPalette => {
             let all = PaletteKind::ALL;
@@ -1501,6 +1561,19 @@ pub fn apply(action: &Action, s: &mut Settings, session: &mut Session) -> Option
         s.preset = Preset::Custom;
     }
     None
+}
+
+/// Choosing the visual delay by hand is choosing it, so the automatic figure stops
+/// writing over it.
+///
+/// Without this, picking a number from the menu would hold only until the sink's
+/// latency next moved, which on a machine that reports it is whenever the output
+/// changes. A switch that quietly undoes what the item beside it just did is worse
+/// than no switch.
+fn chose_delay_by_hand(n: Number, s: &mut Settings) {
+    if n == Number::VisualDelayMs {
+        s.auto_visual_delay = false;
+    }
 }
 
 /// The action a key performs, looked up in the menu itself so the two cannot disagree.
@@ -1608,6 +1681,7 @@ mod tests {
                 seek: true,
             },
             presentations: &Presentation::ALL,
+            reported_delay_ms: None,
         }
     }
 
@@ -1656,6 +1730,65 @@ mod tests {
                 s.number(n)
             );
         }
+    }
+
+    #[test]
+    fn setting_the_visual_delay_by_hand_stops_it_following_the_system() {
+        let mut s = Settings::default();
+        let mut session = Session::default();
+        assert!(s.auto_visual_delay);
+        // Another number leaves the automatic alone.
+        apply(
+            &Action::Set(Number::PhosphorMs, 200.0),
+            &mut s,
+            &mut session,
+        );
+        assert!(s.auto_visual_delay);
+        apply(
+            &Action::Set(Number::VisualDelayMs, 80.0),
+            &mut s,
+            &mut session,
+        );
+        assert_eq!(s.visual_delay_ms, 80);
+        assert!(!s.auto_visual_delay);
+        // And so does stepping it, which is the same choice made a nudge at a time.
+        s.auto_visual_delay = true;
+        apply(
+            &Action::Step(Number::VisualDelayMs, 1.0),
+            &mut s,
+            &mut session,
+        );
+        assert!(!s.auto_visual_delay);
+        // The switch itself is still a switch: it can be put back on.
+        apply(&Action::Toggle(Flag::AutoVisualDelay), &mut s, &mut session);
+        assert!(s.auto_visual_delay);
+    }
+
+    #[test]
+    fn the_automatic_delay_says_what_it_found() {
+        let s = Settings::default();
+        let session = Session::default();
+        let labels = |ctx: &Context<'_>| {
+            let items = tree(ctx);
+            let Some(Kind::Submenu(children)) = items
+                .iter()
+                .find(|i| i.label == "Visual delay")
+                .map(|i| i.kind.clone())
+            else {
+                panic!("no visual delay menu")
+            };
+            children
+                .iter()
+                .map(|c| (c.label.clone(), c.enabled))
+                .collect::<Vec<_>>()
+        };
+        // Nothing reported: the switch is there but greyed, so it is plain that the
+        // figure is missing rather than nought.
+        let mut ctx = context(&s, &session);
+        assert_eq!(labels(&ctx)[0], ("Automatic".to_owned(), false));
+        // A figure reported: the item carries it.
+        ctx.reported_delay_ms = Some(21.8);
+        assert_eq!(labels(&ctx)[0], ("Automatic (22 ms)".to_owned(), true));
     }
 
     #[test]
