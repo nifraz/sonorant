@@ -445,7 +445,7 @@ mod tests {
 
     #[test]
     fn a_wide_gap_fits_everything_without_overlaps() {
-        let s = Settings::default();
+        let s = Settings::nostalgia_plus();
         let d = DeckLayout::new(Rect::new(0, 0, 1200, 130), &s, 1.0, &mut segoe_7pt);
         assert!(d.art.w > 0 && d.info.w > 0 && d.goniometer.w > 0);
         assert!(d.stack.w > 0 && d.loudness.w > 0);
@@ -471,7 +471,7 @@ mod tests {
     fn the_readout_grid_fills_columns_before_adding_them() {
         let mut s = Settings {
             deck_show_track_info: false,
-            ..Settings::default()
+            ..Settings::nostalgia_plus()
         };
         for on in [
             &mut s.deck_show_lufs_m,
@@ -502,7 +502,9 @@ mod tests {
 
     #[test]
     fn a_taller_deck_spends_height_instead_of_width() {
-        let s = Settings::default();
+        // Nostalgia+'s baseline, because these row counts are its deck's rules at its
+        // text size; the app's own default text is larger and fits fewer rows.
+        let s = Settings::nostalgia_plus();
         let tall = DeckLayout::new(Rect::new(0, 0, 1200, 130), &s, 1.0, &mut segoe_7pt);
         let short = DeckLayout::new(Rect::new(0, 0, 1200, 84), &s, 1.0, &mut segoe_7pt);
         assert!(short.loudness.w > tall.loudness.w);
@@ -512,7 +514,13 @@ mod tests {
 
     #[test]
     fn the_band_holds_both_the_lanes_and_the_deck() {
-        let s = Settings::default();
+        // Both are named rather than taken from the defaults: this is about what the
+        // band does when it has to hold the pair, not about what the app ships showing.
+        let s = Settings {
+            show_waveform: true,
+            show_center_deck: true,
+            ..Settings::default()
+        };
         // The deck's height wins over a thin waveform.
         let h = BandLayout::height_for(&s, 900, 1.0);
         assert_eq!(h, s.deck_height_px.max(DeckLayout::PREFERRED_HEIGHT));

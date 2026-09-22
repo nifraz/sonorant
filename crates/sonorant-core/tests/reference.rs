@@ -201,13 +201,13 @@ fn presets_match_nostalgia_plus() {
             continue;
         };
         let preset = Preset::from_name(p).unwrap();
-        let mut ours = Settings::default();
+        let mut ours = Settings::nostalgia_plus();
         ours.apply_preset(preset);
         let theirs = LegacySettings::parse(&read(file.s("file"))).into_settings();
         assert_eq!(ours, theirs, "{p}");
     }
     let default = LegacySettings::parse(&read("settings/default.settings")).into_settings();
-    assert_eq!(default, Settings::default());
+    assert_eq!(default, Settings::nostalgia_plus());
 }
 
 #[test]
@@ -217,7 +217,7 @@ fn every_setting_survives_a_save_and_load() {
     // field, and the file with every field changed proves the importer and the TOML
     // round trip both carry all of them.
     let mutated = LegacySettings::parse(&read("settings/mutated.settings")).into_settings();
-    let default = Settings::default();
+    let default = Settings::nostalgia_plus();
     let a = serde_json::to_value(&mutated).unwrap();
     let d = serde_json::to_value(&default).unwrap();
     // Settings with nothing in a Nostalgia+ file to change them: the frame cap, because

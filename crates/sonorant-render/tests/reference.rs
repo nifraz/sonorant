@@ -1,4 +1,8 @@
 //! Pane geometry against Nostalgia+'s, rectangle for rectangle.
+//!
+//! Laid out from [`Settings::nostalgia_plus`] throughout, not from the app's own
+//! defaults: these rectangles were exported by that program's harness, so they are a
+//! measurement of its settings and stay still while Sonorant's defaults move.
 
 use sonorant_core::dsp::ChannelPairMode;
 use sonorant_core::settings::Settings;
@@ -25,7 +29,7 @@ fn stereo_view_panes_match() {
         let s = Settings {
             pair_mode: ChannelPairMode::from_name(case.s("pair_mode")).unwrap(),
             mirror_left_pane: case.b("mirror_left_pane"),
-            ..Settings::default()
+            ..Settings::nostalgia_plus()
         };
         let l = ScopeLayout::new(Rect::new(0, 0, 1200, 600), &s, 1.0);
         let id = format!(
@@ -80,7 +84,7 @@ fn centre_deck_layouts_match() {
     let cases = doc.arr("center_deck");
     assert!(!cases.is_empty());
     for case in cases {
-        let mut s = Settings::default();
+        let mut s = Settings::nostalgia_plus();
         if case.s("settings") == "readouts_and_info_off" {
             s.deck_show_track_info = false;
             for on in [

@@ -87,36 +87,61 @@ impl LaneUnits {
     }
 }
 
-fn lane_at_top(p: &PaneLayout) -> bool {
-    p.lane.y <= p.bounds.y
+/// One reserved strip, and which end of the pane it is at.
+///
+/// A pane can have a strip at both ends, and everything inside one is drawn from the
+/// end it sits at: the ticks reach towards the image and the text clears them. So the
+/// end travels with the rectangle rather than being asked of the pane each time.
+#[derive(Clone, Copy, Debug)]
+struct Lane {
+    rect: Rect,
+    at_top: bool,
 }
 
-/// The rows a tick inside the lane covers, at its edge facing the image.
-fn lane_tick(p: &PaneLayout) -> (f32, f32) {
-    let len = (p.lane.h / 4).max(3);
-    if lane_at_top(p) {
-        (
-            (p.lane.bottom() - 1 - len) as f32,
-            (p.lane.bottom() - 1) as f32,
-        )
-    } else {
-        (p.lane.y as f32, (p.lane.y + len) as f32)
+impl Lane {
+    /// The pane's strips, top first, skipping the ends that have none.
+    fn all(p: &PaneLayout) -> impl Iterator<Item = Lane> + '_ {
+        p.lanes().map(|rect| Lane {
+            rect,
+            at_top: rect.y <= p.bounds.y,
+        })
+    }
+
+    fn tick_len(self) -> i32 {
+        (self.rect.h / 4).max(3)
+    }
+
+    /// The rows a tick inside the strip covers, at its edge facing the image.
+    fn tick(self) -> (f32, f32) {
+        let len = self.tick_len();
+        if self.at_top {
+            (
+                (self.rect.bottom() - 1 - len) as f32,
+                (self.rect.bottom() - 1) as f32,
+            )
+        } else {
+            (self.rect.y as f32, (self.rect.y + len) as f32)
+        }
+    }
+
+    /// Where text of height `h` sits: centred in the part the ticks leave.
+    fn text_y(self, h: f32) -> f32 {
+        let len = self.tick_len() as f32;
+        let free = self.rect.h as f32 - len;
+        if self.at_top {
+            self.rect.y as f32 + (free - h) / 2.0
+        } else {
+            self.rect.y as f32 + len + (free - h) / 2.0
+        }
     }
 }
 
-/// Where text of height `h` sits in the lane: centred in the part the ticks leave.
-fn lane_text_y(p: &PaneLayout, h: f32) -> f32 {
-    let len = (p.lane.h / 4).max(3) as f32;
-    let free = p.lane.h as f32 - len;
-    if lane_at_top(p) {
-        p.lane.y as f32 + (free - h) / 2.0
-    } else {
-        p.lane.y as f32 + len + (free - h) / 2.0
-    }
-}
-
-/// The reserved strip's ground and hairline, and each scale's unit at the end it's
+/// Each reserved strip's ground and hairline, and each scale's unit at the end it's
 /// measured from: level from the curve's base, time from the live edge.
+///
+/// With a strip at both ends everything in it is repeated rather than split between
+/// them, so either edge of a tall window carries the whole reading. The captions land
+/// on the same columns in both, which is why one set of spans answers for the pane.
 fn scale_lane(
     o: &mut Overlay,
     sc: &Scales<'_>,
@@ -125,72 +150,70 @@ fn scale_lane(
     time_unit: Option<&str>,
 ) -> LaneUnits {
     let mut units = LaneUnits::default();
-    let lane = p.lane;
-    if lane.h <= 0 {
-        return units;
-    }
     let t = &sc.settings.theme;
     let ground = pick_keep_alpha(t.panel, Rgba::argb(255, 13, 13, 16));
-    fill(
-        o,
-        Layer::Under,
-        lane,
-        ground.with_alpha((255.0 * sc.alpha) as u8),
-    );
-    let edge = if lane_at_top(p) {
-        lane.bottom() - 1
-    } else {
-        lane.y
-    };
-    o.hline(
-        Layer::Under,
-        lane.x as f32,
-        (lane.right() - 1) as f32,
-        edge as f32,
-        Rgba::argb((60.0 * sc.alpha) as u8, 255, 255, 255),
-    );
-
     let ink = pick_keep_alpha(t.units, Rgba::argb(190, 150, 200, 245)).faded(sc.alpha);
     let px = sc.label_px();
-    if let Some(unit) = level_unit
-        && p.curve.w >= 40
-    {
-        let sz = o.measure(unit, Face::Sans, px);
-        let x = if p.curve_on_left {
-            p.curve.x as f32 + 2.0
-        } else {
-            p.curve.right() as f32 - sz.w - 2.0
-        };
-        o.text(
+    for lane in Lane::all(p) {
+        fill(
+            o,
             Layer::Under,
-            unit,
-            Face::Sans,
-            px,
-            x,
-            lane_text_y(p, sz.h),
-            ink,
+            lane.rect,
+            ground.with_alpha((255.0 * sc.alpha) as u8),
         );
-        units.level = Some((x - 3.0, x + sz.w + 3.0));
-    }
-    if let Some(unit) = time_unit
-        && p.spectro.w >= 60
-    {
-        let sz = o.measure(unit, Face::Sans, px);
-        let x = if p.curve_on_left {
-            p.spectro.x as f32 + 2.0
+        let edge = if lane.at_top {
+            lane.rect.bottom() - 1
         } else {
-            p.spectro.right() as f32 - sz.w - 2.0
+            lane.rect.y
         };
-        o.text(
+        o.hline(
             Layer::Under,
-            unit,
-            Face::Sans,
-            px,
-            x,
-            lane_text_y(p, sz.h),
-            ink,
+            lane.rect.x as f32,
+            (lane.rect.right() - 1) as f32,
+            edge as f32,
+            Rgba::argb((60.0 * sc.alpha) as u8, 255, 255, 255),
         );
-        units.time = Some((x - 3.0, x + sz.w + 3.0));
+
+        if let Some(unit) = level_unit
+            && p.curve.w >= 40
+        {
+            let sz = o.measure(unit, Face::Sans, px);
+            let x = if p.curve_on_left {
+                p.curve.x as f32 + 2.0
+            } else {
+                p.curve.right() as f32 - sz.w - 2.0
+            };
+            o.text(
+                Layer::Under,
+                unit,
+                Face::Sans,
+                px,
+                x,
+                lane.text_y(sz.h),
+                ink,
+            );
+            units.level = Some((x - 3.0, x + sz.w + 3.0));
+        }
+        if let Some(unit) = time_unit
+            && p.spectro.w >= 60
+        {
+            let sz = o.measure(unit, Face::Sans, px);
+            let x = if p.curve_on_left {
+                p.spectro.x as f32 + 2.0
+            } else {
+                p.spectro.right() as f32 - sz.w - 2.0
+            };
+            o.text(
+                Layer::Under,
+                unit,
+                Face::Sans,
+                px,
+                x,
+                lane.text_y(sz.h),
+                ink,
+            );
+            units.time = Some((x - 3.0, x + sz.w + 3.0));
+        }
     }
     units
 }
@@ -221,6 +244,8 @@ fn time_marks(o: &mut Overlay, sc: &Scales<'_>, p: &PaneLayout, units: &LaneUnit
     let line = line.faded(sc.alpha);
     let px = sc.label_px();
 
+    let lanes: Vec<Lane> = Lane::all(p).collect();
+
     let mut secs = step;
     while secs < visible {
         let off = (secs * sc.px_per_second) as i32;
@@ -238,24 +263,26 @@ fn time_marks(o: &mut Overlay, sc: &Scales<'_>, p: &PaneLayout, units: &LaneUnit
         let label = format!("-{:.0}s", secs - step);
         let sz = o.measure(&label, Face::Sans, px);
         let lx = clamp_into(x - sz.w / 2.0, sz.w, r);
-        if p.lane.h > 0 {
-            let (t0, t1) = lane_tick(p);
-            o.vline(Layer::Under, x, t0, t1, tick);
-            if units.free(lx - 4.0, lx + sz.w + 4.0) {
-                o.text(
-                    Layer::Under,
-                    &label,
-                    Face::Sans,
-                    px,
-                    lx,
-                    lane_text_y(p, sz.h),
-                    text,
-                );
-            }
-        } else {
+        if lanes.is_empty() {
             let ly = r.y as f32 + 3.0 + sc.top_inset;
             chip_behind(o, Layer::Under, lx, ly, sz, chip);
             o.text(Layer::Under, &label, Face::Sans, px, lx, ly, text);
+        } else {
+            for lane in &lanes {
+                let (t0, t1) = lane.tick();
+                o.vline(Layer::Under, x, t0, t1, tick);
+                if units.free(lx - 4.0, lx + sz.w + 4.0) {
+                    o.text(
+                        Layer::Under,
+                        &label,
+                        Face::Sans,
+                        px,
+                        lx,
+                        lane.text_y(sz.h),
+                        text,
+                    );
+                }
+            }
         }
     }
 }
@@ -284,6 +311,7 @@ fn level_scale(o: &mut Overlay, sc: &Scales<'_>, p: &PaneLayout, units: &LaneUni
         (r.right() as f64, -1.0)
     };
     let px = sc.label_px();
+    let lanes: Vec<Lane> = Lane::all(p).collect();
 
     let mut d = (sc.floor_db / step).ceil() * step;
     while d <= sc.ceiling_db {
@@ -293,24 +321,26 @@ fn level_scale(o: &mut Overlay, sc: &Scales<'_>, p: &PaneLayout, units: &LaneUni
         d += step;
         let sz = o.measure(&label, Face::Sans, px);
         let lx = clamp_into(x - sz.w / 2.0, sz.w, r);
-        if p.lane.h > 0 {
-            let (t0, t1) = lane_tick(p);
-            o.vline(Layer::Under, x.floor(), t0, t1, tick);
-            if units.free(lx - 4.0, lx + sz.w + 4.0) {
-                o.text(
-                    Layer::Under,
-                    &label,
-                    Face::Sans,
-                    px,
-                    lx,
-                    lane_text_y(p, sz.h),
-                    text,
-                );
-            }
-        } else {
+        if lanes.is_empty() {
             let ly = r.y as f32 + 3.0 + sc.top_inset;
             chip_behind(o, Layer::Under, lx, ly, sz, chip);
             o.text(Layer::Under, &label, Face::Sans, px, lx, ly, text);
+        } else {
+            for lane in &lanes {
+                let (t0, t1) = lane.tick();
+                o.vline(Layer::Under, x.floor(), t0, t1, tick);
+                if units.free(lx - 4.0, lx + sz.w + 4.0) {
+                    o.text(
+                        Layer::Under,
+                        &label,
+                        Face::Sans,
+                        px,
+                        lx,
+                        lane.text_y(sz.h),
+                        text,
+                    );
+                }
+            }
         }
     }
 }
@@ -543,8 +573,8 @@ fn grid(o: &mut Overlay, sc: &Scales<'_>) {
     }
 }
 
-/// Names the frequency axis at the top of every column that carries it: in the lane
-/// when there is one, on a chip at the top of the axis when not.
+/// Names the frequency axis in every column that carries it: in each reserved strip
+/// where there is one, on a chip at the top of the axis when there is none.
 fn axis_unit(o: &mut Overlay, sc: &Scales<'_>, axis_top: i32) {
     let s = sc.settings;
     let unit = if s.label_mode == AxisLabelMode::Notes && sc.map.scale != FreqScale::Linear {
@@ -554,25 +584,34 @@ fn axis_unit(o: &mut Overlay, sc: &Scales<'_>, axis_top: i32) {
     };
     let px = sc.label_px();
     let sz = o.measure(unit, Face::Sans, px);
-    let lane = sc.layout.panes[0].lane;
-    let in_lane = lane.h as f32 >= sz.h;
-    let y = if in_lane {
-        lane.y as f32 + (lane.h as f32 - sz.h) / 2.0
-    } else {
-        axis_top as f32 + 1.0
-    };
+    let l = sc.layout;
+    // Only the strips tall enough to hold the word; below that the chip is the honest
+    // place for it, as it is when no strip is reserved at all.
+    let rows: Vec<f32> = l
+        .panes
+        .first()
+        .map(|p| {
+            Lane::all(p)
+                .filter(|lane| lane.rect.h as f32 >= sz.h)
+                .map(|lane| lane.rect.y as f32 + (lane.rect.h as f32 - sz.h) / 2.0)
+                .collect()
+        })
+        .unwrap_or_default();
     let chip = Rgba::argb(190, 8, 8, 11).faded(sc.alpha);
     let ink = pick_keep_alpha(s.theme.units, Rgba::argb(190, 150, 200, 245)).faded(sc.alpha);
-    let l = sc.layout;
     for column in [l.gutter, l.outer_left, l.outer_right] {
         if (column.w as f32) < sz.w + 2.0 {
             continue;
         }
         let x = column.x as f32 + (column.w as f32 - sz.w) / 2.0;
-        if !in_lane {
+        if rows.is_empty() {
+            let y = axis_top as f32 + 1.0;
             chip_behind(o, Layer::Over, x, y, sz, chip);
+            o.text(Layer::Over, unit, Face::Sans, px, x, y, ink);
         }
-        o.text(Layer::Over, unit, Face::Sans, px, x, y, ink);
+        for &y in &rows {
+            o.text(Layer::Over, unit, Face::Sans, px, x, y, ink);
+        }
     }
 }
 

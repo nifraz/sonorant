@@ -162,6 +162,7 @@ impl Choice {
             Choice::ScaleLane(p) => match p {
                 ScaleLanePosition::Top => "Top",
                 ScaleLanePosition::Bottom => "Bottom",
+                ScaleLanePosition::Both => "Both ends",
             },
             Choice::Cap(c) => match c {
                 FrameCap::Display => "Every refresh",
@@ -341,6 +342,21 @@ pub struct Context<'a> {
     pub reported_delay_ms: Option<f64>,
 }
 
+/// One value a [`Kind::Choice`] or a [`Kind::Number`] offers.
+///
+/// The menu draws a pick as a radio button in a submenu, which is what it has always
+/// looked like. Help draws the whole group as one row instead, because a list of 257
+/// commands in which four of them are "Which pair of channels the panes show" is not a
+/// list anybody reads.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pick {
+    pub label: String,
+    pub help: &'static str,
+    pub action: Action,
+    pub chosen: bool,
+    pub enabled: bool,
+}
+
 /// What an item is.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Kind {
@@ -348,8 +364,18 @@ pub enum Kind {
     Command(Action),
     /// A switch, with what it is now.
     Check(Action, bool),
-    /// One of a group, with whether it is the one chosen.
+    /// One of a group, with whether it is the one chosen. For a radio that sits among
+    /// other kinds of item; a group of its own is a [`Kind::Choice`].
     Radio(Action, bool),
+    /// A whole group of values, one of them chosen.
+    Choice(Vec<Pick>),
+    /// A number: what it is now, and the values worth coming back to.
+    ///
+    /// The picks are a shortcut, not the whole of it. Anything in [`Number::range`] can
+    /// be set, by the slider the menu draws under them or by the steppers beside it,
+    /// because a figure that suits one room or one pair of ears is rarely one of five
+    /// round numbers.
+    Number(Number, f64, Vec<Pick>),
     Submenu(Vec<Item>),
     Separator,
 }
@@ -405,10 +431,14 @@ impl Item {
     }
 
     /// The action the item performs, if any.
+    ///
+    /// A choice or a number has none of its own: what happens depends on which value is
+    /// picked or where the slider is put, so those are on the [`Pick`]s and on
+    /// [`Action::Set`].
     pub fn action(&self) -> Option<&Action> {
         match &self.kind {
             Kind::Command(a) | Kind::Check(a, _) | Kind::Radio(a, _) => Some(a),
-            Kind::Submenu(_) | Kind::Separator => None,
+            Kind::Choice(_) | Kind::Number(..) | Kind::Submenu(_) | Kind::Separator => None,
         }
     }
 
@@ -428,7 +458,18 @@ fn flag(label: &'static str, help: &'static str, f: Flag, s: &Settings) -> Item 
     Item::check(label, help, Action::Toggle(f), s.flag(f))
 }
 
-/// A submenu of one radio group: every value of a choice, with the current one marked.
+/// One value of a group, ready to draw.
+fn pick(label: impl Into<String>, help: &'static str, action: Action, chosen: bool) -> Pick {
+    Pick {
+        label: label.into(),
+        help,
+        action,
+        chosen,
+        enabled: true,
+    }
+}
+
+/// Every value of a choice, with the current one marked.
 fn choices<T: Copy>(
     label: &'static str,
     help: &'static str,
@@ -437,17 +478,44 @@ fn choices<T: Copy>(
     item_help: &'static str,
     s: &Settings,
 ) -> Item {
-    let items = values
+    let picks = values
         .into_iter()
         .map(|v| {
             let c = wrap(v);
-            Item::radio(c.label(), item_help, Action::Choose(c), c.is_current(s))
+            pick(c.label(), item_help, Action::Choose(c), c.is_current(s))
         })
         .collect();
-    Item::submenu(label, help, items)
+    Item::of(label, help, Kind::Choice(picks))
 }
 
-/// A submenu of set sizes for one number, with the nearest marked.
+/// A choice whose values carry their own help line, for the ones worth explaining
+/// apart: a palette reads differently from the next palette along, and saying so once
+/// per value beats one sentence covering all thirteen.
+fn choices_each<T: Copy>(
+    label: &'static str,
+    help: &'static str,
+    values: impl IntoIterator<Item = T>,
+    wrap: impl Fn(T) -> Choice,
+    item_help: impl Fn(T) -> &'static str,
+    s: &Settings,
+) -> Item {
+    let picks = values
+        .into_iter()
+        .map(|v| {
+            let c = wrap(v);
+            pick(c.label(), item_help(v), Action::Choose(c), c.is_current(s))
+        })
+        .collect();
+    Item::of(label, help, Kind::Choice(picks))
+}
+
+/// A number: the values worth coming back to, and the whole range between them.
+///
+/// A pick is marked only when the value really is that value. It used to mark whichever
+/// was nearest, so that a figure from a preset or an old file didn't leave the group
+/// with nothing ticked, and that is no longer the kinder answer: the slider under the
+/// picks says where the value is, and a tick on 3.0 while the slider reads 3.4 is a
+/// disagreement between two things on the same screen.
 fn sizes(
     label: &'static str,
     help: &'static str,
@@ -457,20 +525,25 @@ fn sizes(
     s: &Settings,
 ) -> Item {
     let now = s.number(n);
-    // The current value may be one no menu entry offers, from a preset or an old file,
-    // so the nearest is marked rather than none of them.
     let nearest = steps
         .iter()
         .copied()
-        .min_by(|a, b| (a - now).abs().total_cmp(&(b - now).abs()));
-    let items = steps
+        .min_by(|a, b| (a - now).abs().total_cmp(&(b - now).abs()))
+        .filter(|v| (v - now).abs() < f64::EPSILON.max(n.range().step / 2.0));
+    let picks = steps
         .iter()
-        .map(|&v| Item::radio(fmt(v), help, Action::Set(n, v), nearest == Some(v)))
+        .map(|&v| pick(fmt(v), help, Action::Set(n, v), nearest == Some(v)))
         .collect();
-    Item::submenu(label, help, items)
+    Item::of(label, help, Kind::Number(n, now, picks))
 }
 
 /// Builds the whole menu for the state in `ctx`.
+///
+/// The order is what you reach for, not what the settings struct happens to list. The
+/// presets come first because one of them is often the whole answer; then what is being
+/// listened to; then the seven groups that are the picture itself; then the things done
+/// to a running picture, which carry the keys; then the app's own three. `Close menu`
+/// is last and alone, because it is the way out rather than another thing the menu does.
 pub fn tree(ctx: &Context<'_>) -> Vec<Item> {
     let s = ctx.settings;
     let session = ctx.session;
@@ -481,44 +554,56 @@ pub fn tree(ctx: &Context<'_>) -> Vec<Item> {
             presets(ctx),
         ),
         Item::separator(),
-        Item::submenu(
+        Item::of(
             "Capture",
             "Which sound is analysed",
-            Capture::ALL
-                .iter()
-                .map(|&c| {
-                    Item::radio(
-                        c.label(),
-                        "Analyse the followed player alone, or the whole mix",
-                        Action::SetCapture(c),
-                        session.capture == c,
-                    )
-                })
-                .collect(),
+            Kind::Choice(
+                Capture::ALL
+                    .iter()
+                    .map(|&c| {
+                        pick(
+                            c.label(),
+                            "Analyse the followed player alone, or the whole mix",
+                            Action::SetCapture(c),
+                            session.capture == c,
+                        )
+                    })
+                    .collect(),
+            ),
         ),
         Item::submenu(
-            "Follow player",
-            "Which player the deck and capture follow",
-            follow(ctx),
+            "Playback",
+            "Which player is followed, and what to ask it to do",
+            playback(ctx),
         ),
         Item::separator(),
         Item::submenu("Analysis", "How the sound is measured", analysis(s)),
-        Item::submenu("Graph", "The curve strip beside each image", graph(s)),
-        Item::submenu("Spectrogram", "The scrolling image itself", spectrogram(s)),
         Item::submenu(
-            "Axes and labels",
-            "The grid, the scales and their text",
+            "Spectrogram",
+            "The scrolling image: its colours, its axis and how fast it runs",
+            spectrogram(s),
+        ),
+        Item::submenu("Spectrum", "The curve strip beside each image", spectrum(s)),
+        Item::submenu(
+            "Scales and labels",
+            "The grid, the scales, their text and what the pointer reads out",
             axes(s),
         ),
-        Item::submenu("Hover", "What the pointer reads out", hover(s)),
-        Item::submenu("Waveform", "The lanes along the bottom", waveform(s)),
-        Item::submenu("Centre deck", "The panel between the panes", deck(s)),
         Item::submenu(
-            "Quick bar",
-            "The row of buttons over the image",
-            quick_bar(s),
+            "Panels",
+            "The deck, the lanes, the quick bar and the other furniture",
+            panels(s),
         ),
-        Item::submenu("Immersive", "The full-screen treatment", immersive(s)),
+        Item::submenu(
+            "Look and immersion",
+            "The full-screen treatment: glow, backdrop and the beat",
+            immersive(s),
+        ),
+        Item::submenu(
+            "Performance",
+            "Frame rate, how much the new visuals may do, and the visual delay",
+            performance(ctx),
+        ),
         Item::separator(),
         Item::check(
             "Freeze",
@@ -554,49 +639,6 @@ pub fn tree(ctx: &Context<'_>) -> Vec<Item> {
         )
         .key("Esc")
         .when(session.fullscreen),
-        Item::submenu("Player", "Ask the player to do something", transport(ctx)),
-        Item::separator(),
-        Item::submenu(
-            "Frame rate",
-            "How often the screen is redrawn",
-            vec![
-                choices(
-                    "Redraw",
-                    "How often the screen is redrawn; scrolling follows audio time either way",
-                    FrameCap::ALL.iter().copied(),
-                    Choice::Cap,
-                    "How often the screen is redrawn",
-                    s,
-                ),
-                Item::submenu(
-                    "Presentation",
-                    "How finished frames reach the screen",
-                    Presentation::ALL
-                        .iter()
-                        .map(|&p| {
-                            Item::radio(
-                                p.label(),
-                                "How finished frames reach the screen",
-                                Action::SetPresentation(p),
-                                session.presentation == p,
-                            )
-                            .when(ctx.presentations.contains(&p))
-                        })
-                        .collect(),
-                ),
-            ],
-        ),
-        Item::submenu(
-            "Visual delay",
-            "Hold the picture back so it lines up with what you hear",
-            visual_delay(ctx),
-        ),
-        Item::check(
-            "Status line",
-            "The line of figures over the image",
-            Action::Toggle(Flag::ShowStatus),
-            s.flag(Flag::ShowStatus),
-        ),
         Item::separator(),
         Item::check(
             "Help",
@@ -621,6 +663,78 @@ pub fn tree(ctx: &Context<'_>) -> Vec<Item> {
             Action::CloseMenu,
         ),
     ]
+}
+
+/// The player: which one is followed, and the three things it can be asked.
+///
+/// One group, because they are one subject. Following and asking were two top-level
+/// submenus with nine others between them, which is a strange place to leave the two
+/// items that are about the same player.
+fn playback(ctx: &Context<'_>) -> Vec<Item> {
+    let mut items = vec![follow(ctx), Item::separator()];
+    items.extend(transport(ctx));
+    items
+}
+
+/// Frame rate, presentation, how much the new visuals may do, and the visual delay.
+fn performance(ctx: &Context<'_>) -> Vec<Item> {
+    let s = ctx.settings;
+    vec![
+        choices(
+            "Redraw",
+            "How often the screen is redrawn; scrolling follows audio time either way",
+            FrameCap::ALL.iter().copied(),
+            Choice::Cap,
+            "How often the screen is redrawn",
+            s,
+        ),
+        Item::of(
+            "Presentation",
+            "How finished frames reach the screen",
+            Kind::Choice(
+                Presentation::ALL
+                    .iter()
+                    .map(|&p| Pick {
+                        enabled: ctx.presentations.contains(&p),
+                        ..pick(
+                            p.label(),
+                            match p {
+                                Presentation::EveryRefresh => {
+                                    "Queue every frame for the next refresh: no tearing"
+                                }
+                                Presentation::Newest => {
+                                    "Keep only the newest frame queued: no tearing, least delay"
+                                }
+                                Presentation::Immediate => {
+                                    "Show a frame the moment it is drawn, tearing included"
+                                }
+                            },
+                            Action::SetPresentation(p),
+                            session_presentation(ctx) == p,
+                        )
+                    })
+                    .collect(),
+            ),
+        ),
+        choices(
+            "Visual quality",
+            "How much work the waterfall, the glow and the backdrop may do",
+            RenderQuality::ALL.iter().copied(),
+            Choice::Render,
+            "Lower is cheaper on a weak GPU; Medium is what the app has always drawn",
+            s,
+        ),
+        Item::separator(),
+        Item::submenu(
+            "Visual delay",
+            "Hold the picture back so it lines up with what you hear",
+            visual_delay(ctx),
+        ),
+    ]
+}
+
+fn session_presentation(ctx: &Context<'_>) -> Presentation {
+    ctx.session.presentation
 }
 
 /// The visual delay: the automatic figure where there is one, and the offsets by hand.
@@ -671,37 +785,67 @@ fn visual_delay(ctx: &Context<'_>) -> Vec<Item> {
 
 fn presets(ctx: &Context<'_>) -> Vec<Item> {
     let s = ctx.settings;
+    // Grouped by what you would be doing, not by who wrote them: the shipped settings,
+    // then the ones for watching, then the ones for a kind of material, then the ones
+    // for work. `None` is a rule off between two groups.
     let built_in = [
-        (
+        Some((
+            Preset::Default,
+            "The settings the app ships with: the same as resetting everything",
+        )),
+        None,
+        Some((
             Preset::Studio,
             "A musical axis and a gentle tilt: the everyday view",
-        ),
-        (
-            Preset::Nostalgia,
-            "The original plugin's look, without its mapping bugs",
-        ),
-        (
-            Preset::QC,
-            "Flat, wide and linear, for spotting a lossy source",
-        ),
-        (Preset::Immersive, "For watching rather than measuring"),
-        (
+        )),
+        Some((Preset::Immersive, "For watching rather than measuring")),
+        Some((
+            Preset::Club,
+            "Short windows, a fast scroll and every immersive trick: for dancing to",
+        )),
+        None,
+        Some((
             Preset::Vocal,
             "Where voices live, with the detail to separate formants",
-        ),
-        (
+        )),
+        Some((
+            Preset::Speech,
+            "Talk: wider at the bottom than Vocal, and quick enough for consonants",
+        )),
+        Some((
             Preset::Bass,
             "A narrow low range, with the largest transforms",
-        ),
-        (
+        )),
+        Some((
             Preset::Percussion,
             "Short windows, so transients land where they are heard",
-        ),
-        (Preset::Mastering, "Nothing tilted or adaptive: measurement"),
+        )),
+        Some((
+            Preset::Classical,
+            "Long, slow and quiet: a floor deep enough to hold a real pianissimo",
+        )),
+        None,
+        Some((
+            Preset::QC,
+            "Flat, wide and linear, for spotting a lossy source",
+        )),
+        Some((Preset::Mastering, "Nothing tilted or adaptive: measurement")),
+        Some((
+            Preset::Broadcast,
+            "A fixed window to full scale, with the deck showing the loudness figures",
+        )),
+        None,
+        Some((
+            Preset::Nostalgia,
+            "The original plugin's look, without its mapping bugs",
+        )),
     ];
     let mut items: Vec<Item> = built_in
         .iter()
-        .map(|&(p, help)| Item::radio(p.name(), help, Action::UsePreset(p), s.preset == p))
+        .map(|entry| match *entry {
+            Some((p, help)) => Item::radio(p.name(), help, Action::UsePreset(p), s.preset == p),
+            None => Item::separator(),
+        })
         .collect();
     items.push(Item::separator());
     if ctx.presets.is_empty() {
@@ -748,35 +892,33 @@ fn presets(ctx: &Context<'_>) -> Vec<Item> {
     items
 }
 
-fn follow(ctx: &Context<'_>) -> Vec<Item> {
-    let mut items = vec![Item::radio(
+fn follow(ctx: &Context<'_>) -> Item {
+    let mut picks = vec![pick(
         "Whichever is playing",
         "Follow whichever player is playing, preferring the one that started last",
         Action::SetFollow(Follow::Whichever),
         ctx.session.follow == Follow::Whichever,
     )];
-    if ctx.players.is_empty() {
-        items.push(
-            Item::command(
-                "No players running",
-                "Players appear here once one is open",
-                Action::SetFollow(Follow::Whichever),
-            )
-            .when(false),
-        );
-    }
     for player in ctx.players {
         // Pinning is by id, because two windows of the same app share a name.
         let pinned = Follow::Pinned(player.id.clone());
         let chosen = ctx.session.follow == pinned;
-        items.push(Item::radio(
+        picks.push(pick(
             player.name.clone(),
             "Follow this player, whatever else starts",
             Action::SetFollow(pinned),
             chosen,
         ));
     }
-    items
+    Item::of(
+        "Follow player",
+        if ctx.players.is_empty() {
+            "Which player is followed. None is running, so there is only the one entry"
+        } else {
+            "Which player the deck and capture follow"
+        },
+        Kind::Choice(picks),
+    )
 }
 
 fn transport(ctx: &Context<'_>) -> Vec<Item> {
@@ -896,13 +1038,13 @@ fn analysis(s: &Settings) -> Vec<Item> {
     ]
 }
 
-fn graph(s: &Settings) -> Vec<Item> {
+fn spectrum(s: &Settings) -> Vec<Item> {
     vec![
         sizes(
             "Width",
             "How much of each pane the curve strip takes",
             Number::CurveWidthPct,
-            &[0.0, 10.0, 18.0, 26.0, 40.0],
+            &[0.0, 10.0, 18.0, 26.0, 33.0, 40.0, 50.0, 60.0],
             |v| {
                 if v == 0.0 {
                     "Hidden".to_owned()
@@ -958,10 +1100,32 @@ fn graph(s: &Settings) -> Vec<Item> {
             s,
         )
         .key("P"),
+        sizes(
+            "Peak decay",
+            "How fast the held maximum lets go of a peak",
+            Number::PeakDecay,
+            &[0.0, 6.0, 14.0, 24.0, 40.0, 60.0],
+            |v| {
+                if v == 0.0 {
+                    "Never".to_owned()
+                } else {
+                    format!("{v:.0} dB a second")
+                }
+            },
+            s,
+        ),
         flag(
             "Average trace",
             "The running average of the spectrum",
             Flag::ShowAvg,
+            s,
+        ),
+        sizes(
+            "Average window",
+            "How long the average trace takes to follow a change",
+            Number::AverageSeconds,
+            &[0.2, 0.6, 1.2, 3.0, 6.0, 10.0],
+            |v| format!("{v:.1} s"),
             s,
         ),
         flag(
@@ -999,7 +1163,7 @@ fn graph(s: &Settings) -> Vec<Item> {
             "Bar width",
             "How wide one bar is, in the bar and LED styles",
             Number::BarSize,
-            &[2.0, 4.0, 6.0, 10.0, 16.0],
+            &[1.0, 2.0, 3.0, 4.0, 6.0, 10.0, 16.0, 24.0, 32.0],
             |v| format!("{v:.0} px"),
             s,
         ),
@@ -1007,7 +1171,7 @@ fn graph(s: &Settings) -> Vec<Item> {
             "LED segment",
             "How tall one lit segment is in the LED style",
             Number::LedSegment,
-            &[3.0, 5.0, 8.0, 12.0],
+            &[2.0, 3.0, 5.0, 8.0, 12.0, 20.0, 32.0],
             |v| format!("{v:.0} px"),
             s,
         ),
@@ -1016,12 +1180,12 @@ fn graph(s: &Settings) -> Vec<Item> {
 
 fn spectrogram(s: &Settings) -> Vec<Item> {
     vec![
-        choices(
+        choices_each(
             "Palette",
             "The colours levels are drawn in",
             PaletteKind::ALL.iter().copied(),
             Choice::Palette,
-            "Draw the image in these colours",
+            PaletteKind::about,
             s,
         ),
         Item::command(
@@ -1030,6 +1194,7 @@ fn spectrogram(s: &Settings) -> Vec<Item> {
             Action::NextPalette,
         )
         .key("C"),
+        Item::separator(),
         choices(
             "Frequency axis",
             "How frequency is spread across the axis",
@@ -1039,10 +1204,29 @@ fn spectrogram(s: &Settings) -> Vec<Item> {
             s,
         ),
         sizes(
+            "Lowest frequency",
+            "Where the axis starts",
+            Number::Fmin,
+            &[0.0, 20.0, 30.0, 40.0, 60.0, 80.0, 150.0, 300.0],
+            |v| format!("{v:.0} Hz"),
+            s,
+        ),
+        sizes(
+            "Highest frequency",
+            "Where the axis ends",
+            Number::Fmax,
+            &[
+                4000.0, 8000.0, 10000.0, 12000.0, 16000.0, 18000.0, 20000.0, 22050.0,
+            ],
+            |v| format!("{:.1} kHz", v / 1000.0),
+            s,
+        ),
+        Item::separator(),
+        sizes(
             "Scroll speed",
             "How many rows of history a second of sound becomes",
             Number::RowsPerSecond,
-            &[15.0, 30.0, 60.0, 120.0],
+            &[10.0, 15.0, 30.0, 45.0, 60.0, 90.0, 120.0, 180.0, 240.0],
             |v| format!("{v:.0} rows a second"),
             s,
         ),
@@ -1050,19 +1234,25 @@ fn spectrogram(s: &Settings) -> Vec<Item> {
             "Zoom",
             "How many screen pixels one row is drawn across",
             Number::PxPerRow,
-            &[1.0, 2.0, 4.0, 8.0],
+            &[1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0],
             |v| format!("{v:.0} px a row"),
             s,
         ),
-        Item::separator(),
-        choices(
-            "Visual quality",
-            "How much work the waterfall, the glow and the backdrop may do",
-            RenderQuality::ALL.iter().copied(),
-            Choice::Render,
-            "Lower is cheaper on a weak GPU; Medium is what the app has always drawn",
+        sizes(
+            "History length",
+            "How far back the wheel and a drag can reach, as far as memory allows",
+            Number::HistoryMinutes,
+            &[1.0, 3.0, 5.0, 10.0, 15.0, 30.0, 60.0],
+            |v| format!("{v:.0} min"),
             s,
         ),
+        flag(
+            "Blend between rows",
+            "Fade between rows rather than stepping, so slow scrolling stays smooth",
+            Flag::SmoothTime,
+            s,
+        ),
+        Item::separator(),
         flag(
             "Waterfall",
             "Draw the history as a landscape, with a camera you can orbit",
@@ -1088,52 +1278,6 @@ fn spectrogram(s: &Settings) -> Vec<Item> {
                     )
                 })
                 .collect(),
-        ),
-        Item::separator(),
-        sizes(
-            "History length",
-            "How far back the wheel and a drag can reach, as far as memory allows",
-            Number::HistoryMinutes,
-            &[1.0, 3.0, 5.0, 10.0, 15.0],
-            |v| format!("{v:.0} min"),
-            s,
-        ),
-        flag(
-            "Blend between rows",
-            "Fade between rows rather than stepping, so slow scrolling stays smooth",
-            Flag::SmoothTime,
-            s,
-        ),
-        Item::separator(),
-        sizes(
-            "Lowest frequency",
-            "Where the axis starts",
-            Number::Fmin,
-            &[0.0, 20.0, 40.0, 80.0, 150.0],
-            |v| format!("{v:.0} Hz"),
-            s,
-        ),
-        sizes(
-            "Highest frequency",
-            "Where the axis ends",
-            Number::Fmax,
-            &[8000.0, 12000.0, 16000.0, 18000.0, 20000.0, 22050.0],
-            |v| format!("{:.0} kHz", v / 1000.0),
-            s,
-        ),
-        sizes(
-            "Centre gutter",
-            "How wide the labelled strip between the panes is",
-            Number::GutterWidth,
-            &[0.0, 24.0, 34.0, 48.0, 64.0],
-            |v| format!("{v:.0} px"),
-            s,
-        ),
-        flag(
-            "Colour bar",
-            "The level-to-colour key down the right edge",
-            Flag::ShowColourBar,
-            s,
         ),
     ]
 }
@@ -1174,6 +1318,12 @@ fn axes(s: &Settings) -> Vec<Item> {
             s,
         ),
         flag(
+            "Channel names",
+            "The L and R written in the corner of each pane",
+            Flag::ShowLabels,
+            s,
+        ),
+        flag(
             "Level scale",
             "The dB scale along the curve strip",
             Flag::ShowDbScale,
@@ -1192,12 +1342,18 @@ fn axes(s: &Settings) -> Vec<Item> {
             Flag::ReserveScaleSpace,
             s,
         ),
-        choices(
+        choices_each(
             "Strip at",
-            "Which end of the panes the scale strip sits at",
+            "Which end of the panes the scale strip sits at, or both",
             ScaleLanePosition::ALL.iter().copied(),
             Choice::ScaleLane,
-            "Which end the scale strip sits at",
+            |v| match v {
+                ScaleLanePosition::Top => "Over the image",
+                ScaleLanePosition::Bottom => "Under the image",
+                ScaleLanePosition::Both => {
+                    "At both ends, repeated rather than split, for twice the height"
+                }
+            },
             s,
         ),
         flag(
@@ -1206,13 +1362,34 @@ fn axes(s: &Settings) -> Vec<Item> {
             Flag::ShowScaleUnits,
             s,
         ),
+        Item::separator(),
         sizes(
             "Text size",
             "How large the axis, scale and readout text is",
             Number::LabelFontSize,
-            &[6.0, 7.0, 8.0, 10.0, 12.0],
+            &[5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 12.0, 14.0, 18.0, 22.0, 28.0],
             |v| format!("{v:.0} pt"),
             s,
+        ),
+        sizes(
+            "Centre gutter",
+            "How wide the labelled strip between the panes is",
+            Number::GutterWidth,
+            &[0.0, 16.0, 24.0, 34.0, 48.0, 64.0, 90.0, 120.0],
+            |v| {
+                if v == 0.0 {
+                    "None".to_owned()
+                } else {
+                    format!("{v:.0} px")
+                }
+            },
+            s,
+        ),
+        Item::separator(),
+        Item::submenu(
+            "Hover readout",
+            "What the pointer reads out of the picture",
+            hover(s),
         ),
     ]
 }
@@ -1220,12 +1397,11 @@ fn axes(s: &Settings) -> Vec<Item> {
 fn hover(s: &Settings) -> Vec<Item> {
     vec![
         flag(
-            "On-screen readouts",
-            "The hover readout, the quick bar and the status line over the image",
-            Flag::ShowOsd,
+            "Readout box",
+            "The panel of figures beside the pointer. The crosshair and the pin stay",
+            Flag::ShowHud,
             s,
-        )
-        .key("O"),
+        ),
         flag(
             "Read out both panes",
             "Draw the hover line across both panes and read out both channels",
@@ -1253,10 +1429,56 @@ fn hover(s: &Settings) -> Vec<Item> {
     ]
 }
 
+/// The furniture around the picture: the master switch, then one submenu per panel.
+///
+/// The colour bar and the status line have no submenu of their own because they are one
+/// switch each, and a submenu holding a single item is a door to a cupboard.
+fn panels(s: &Settings) -> Vec<Item> {
+    vec![
+        flag(
+            "On-screen readouts",
+            "Everything drawn over the image: the hover readout, the quick bar and the \
+             status line",
+            Flag::ShowOsd,
+            s,
+        )
+        .key("O"),
+        Item::separator(),
+        Item::submenu(
+            "Centre deck",
+            "The panel of figures between the panes",
+            deck(s),
+        ),
+        Item::submenu(
+            "Waveform lanes",
+            "The level against time along the bottom",
+            waveform(s),
+        ),
+        Item::submenu(
+            "Quick bar",
+            "The row of buttons over the image",
+            quick_bar(s),
+        ),
+        Item::separator(),
+        flag(
+            "Colour bar",
+            "The level-to-colour key down the right edge",
+            Flag::ShowColourBar,
+            s,
+        ),
+        flag(
+            "Status line",
+            "The line of figures over the image: capture, loudness, frame rate and lag",
+            Flag::ShowStatus,
+            s,
+        ),
+    ]
+}
+
 fn waveform(s: &Settings) -> Vec<Item> {
     vec![
         flag(
-            "Waveform lanes",
+            "Show the lanes",
             "The level against time along the bottom",
             Flag::ShowWaveform,
             s,
@@ -1266,7 +1488,7 @@ fn waveform(s: &Settings) -> Vec<Item> {
             "Height",
             "How much of the view the lanes take",
             Number::WaveHeightPct,
-            &[0.0, 6.0, 10.0, 16.0, 24.0],
+            &[0.0, 4.0, 6.0, 10.0, 16.0, 24.0, 32.0, 40.0],
             |v| {
                 if v == 0.0 {
                     "Hidden".to_owned()
@@ -1282,7 +1504,7 @@ fn waveform(s: &Settings) -> Vec<Item> {
 fn deck(s: &Settings) -> Vec<Item> {
     vec![
         flag(
-            "Centre deck",
+            "Show the deck",
             "The panel of figures between the panes",
             Flag::ShowCentreDeck,
             s,
@@ -1291,7 +1513,7 @@ fn deck(s: &Settings) -> Vec<Item> {
             "Height",
             "How tall the deck and the lanes beside it are",
             Number::DeckHeightPx,
-            &[80.0, 100.0, 120.0, 160.0, 200.0],
+            &[60.0, 80.0, 100.0, 120.0, 160.0, 200.0, 280.0, 400.0],
             |v| format!("{v:.0} px"),
             s,
         ),
@@ -1325,7 +1547,7 @@ fn deck(s: &Settings) -> Vec<Item> {
             "Phosphor persistence",
             "How long the trace takes to fade away",
             Number::PhosphorMs,
-            &[120.0, 250.0, 500.0, 1000.0, 2000.0],
+            &[60.0, 120.0, 250.0, 500.0, 750.0, 1000.0, 1500.0, 2000.0],
             |v| {
                 if v >= 1000.0 {
                     format!("{:.1} s", v / 1000.0)
@@ -1339,7 +1561,7 @@ fn deck(s: &Settings) -> Vec<Item> {
             "Phosphor intensity",
             "How hard the trace is written",
             Number::PhosphorIntensity,
-            &[40.0, 70.0, 100.0, 150.0, 220.0],
+            &[10.0, 40.0, 70.0, 100.0, 150.0, 220.0, 300.0],
             |v| format!("{v:.0}%"),
             s,
         ),
@@ -1411,7 +1633,7 @@ fn deck(s: &Settings) -> Vec<Item> {
 fn quick_bar(s: &Settings) -> Vec<Item> {
     vec![
         flag(
-            "Quick bar",
+            "Show the bar",
             "A row of buttons for the things changed most often",
             Flag::ShowQuickButtons,
             s,
@@ -1639,14 +1861,70 @@ fn find_key(items: &[Item], key: &str) -> Option<Action> {
 }
 
 /// What an entry does, so help can show the state beside it rather than only the name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum EntryKind {
     /// Something that happens once.
     Command,
     /// A switch, and whether it is on.
     Check(bool),
-    /// One of a set, and whether it is the one chosen.
+    /// One of a set, and whether it is the one chosen. A radio that sits among other
+    /// kinds of item; a whole group is one [`EntryKind::Choice`] row.
     Radio(bool),
+    /// A whole group, as one row: help draws the values in a dropdown rather than
+    /// spending a row on each of them.
+    Choice(Vec<Pick>),
+    /// A number, where it is, and the values worth coming back to: a slider, with
+    /// those beside it.
+    Number(Number, f64, Vec<Pick>),
+}
+
+impl EntryKind {
+    /// What the row reads as now: a switch's state, a choice's value, a number and its
+    /// unit, or nothing for a command.
+    pub fn value(&self) -> Option<String> {
+        match self {
+            EntryKind::Command => None,
+            EntryKind::Check(on) => Some(if *on { "on" } else { "off" }.to_owned()),
+            EntryKind::Radio(chosen) => {
+                Some(if *chosen { "chosen" } else { "not chosen" }.to_owned())
+            }
+            EntryKind::Choice(picks) => Some(
+                picks
+                    .iter()
+                    .find(|p| p.chosen)
+                    .map_or_else(|| "—".to_owned(), |p| p.label.clone()),
+            ),
+            EntryKind::Number(n, v, _) => Some(written(*n, *v)),
+        }
+    }
+}
+
+/// A number written out with its unit, for a help row and a slider's own label.
+pub fn written(n: Number, v: f64) -> String {
+    let r = n.range();
+    // Enough places to tell one step from the next, and then the noughts that buys
+    // trimmed off again: a tilt of three is "3 dB/oct", and one of three and a quarter
+    // is "3.25 dB/oct", rather than both carrying two decimals because one of them
+    // needs them.
+    let places = if r.whole || r.step >= 1.0 {
+        0
+    } else if r.step >= 0.1 {
+        1
+    } else {
+        2
+    };
+    let mut figure = format!("{v:.places$}");
+    if figure.contains('.') {
+        figure = figure
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_owned();
+    }
+    if r.unit.is_empty() {
+        figure
+    } else {
+        format!("{figure} {}", r.unit)
+    }
 }
 
 /// One command as the help window lists it.
@@ -1663,6 +1941,12 @@ pub struct Entry {
     pub kind: EntryKind,
     /// Greyed out in the menu, so greyed out here, and its key does nothing.
     pub enabled: bool,
+    /// What would put this setting back to the value the app ships with, or `None`
+    /// where it is already there or is not a setting at all.
+    ///
+    /// Held rather than worked out by whatever draws the row, so "what have I changed?"
+    /// has one answer and help's filter and its revert button cannot disagree.
+    pub reset: Option<Action>,
 }
 
 /// The top-level items, which belong to no submenu, grouped under this heading.
@@ -1685,48 +1969,123 @@ impl Entry {
             None => self.path.as_str(),
         }
     }
+
+    /// The values this row offers, where it offers any.
+    pub fn picks(&self) -> &[Pick] {
+        match &self.kind {
+            EntryKind::Choice(picks) | EntryKind::Number(_, _, picks) => picks,
+            _ => &[],
+        }
+    }
+
+    /// Whether `query`, already lowercased and trimmed, is anywhere in this row.
+    ///
+    /// The values are searched as well as the row, because a choice is one row now and
+    /// "Viridis" has to find the palette. The key is matched by part rather than whole:
+    /// "f1" finds help, and so does "f".
+    pub fn matches(&self, query: &str) -> bool {
+        query.is_empty()
+            || self.path.to_lowercase().contains(query)
+            || self.help.to_lowercase().contains(query)
+            || self
+                .shortcut
+                .is_some_and(|k| k.to_lowercase().contains(query))
+            || self.picks().iter().any(|p| {
+                p.label.to_lowercase().contains(query) || p.help.to_lowercase().contains(query)
+            })
+    }
+
+    /// Whether this row differs from what the app ships with.
+    pub fn changed(&self) -> bool {
+        self.reset.is_some()
+    }
 }
 
 /// Every command in the tree, with the path that leads to it.
+///
+/// A choice or a number is one entry, not one per value: the menu spends a submenu of
+/// radios on it because that is how a menu picks a value, and a flat list of 257 rows
+/// in which four of them read "Which pair of channels the panes show" is not a list.
+/// The values ride along on the entry, so searching still finds them by name.
 pub fn entries(items: &[Item]) -> Vec<Entry> {
     let mut out = Vec::new();
-    walk(items, "", &mut out);
+    let shipped = Settings::default();
+    walk(items, "", &shipped, &mut out);
     out
 }
 
-fn walk(items: &[Item], prefix: &str, out: &mut Vec<Entry>) {
+fn walk(items: &[Item], prefix: &str, shipped: &Settings, out: &mut Vec<Entry>) {
+    let under = |label: &str| {
+        if prefix.is_empty() {
+            label.to_owned()
+        } else {
+            format!("{prefix} > {label}")
+        }
+    };
     for item in items {
         match &item.kind {
             Kind::Separator => {}
-            Kind::Submenu(children) => {
-                let path = if prefix.is_empty() {
-                    item.label.clone()
-                } else {
-                    format!("{prefix} > {}", item.label)
-                };
-                walk(children, &path, out);
-            }
-            Kind::Command(a) | Kind::Check(a, _) | Kind::Radio(a, _) => {
-                let path = if prefix.is_empty() {
-                    item.label.clone()
-                } else {
-                    format!("{prefix} > {}", item.label)
-                };
+            Kind::Submenu(children) => walk(children, &under(&item.label), shipped, out),
+            Kind::Choice(picks) => {
+                // Enter on the row re-picks what is already picked, which is the honest
+                // answer: the row is a reading, and the dropdown is what changes it.
+                let chosen = picks.iter().find(|p| p.chosen);
                 out.push(Entry {
-                    path,
+                    path: under(&item.label),
                     help: item.help,
                     shortcut: item.shortcut,
-                    action: a.clone(),
-                    kind: match &item.kind {
-                        Kind::Check(_, on) => EntryKind::Check(*on),
-                        Kind::Radio(_, chosen) => EntryKind::Radio(*chosen),
-                        _ => EntryKind::Command,
-                    },
+                    action: chosen.map_or(Action::CloseMenu, |p| p.action.clone()),
+                    kind: EntryKind::Choice(picks.clone()),
                     enabled: item.enabled,
+                    reset: shipped_pick(picks, shipped)
+                        .filter(|p| !p.chosen)
+                        .map(|p| p.action.clone()),
                 });
             }
+            // The named values ride along rather than becoming rows of their own, so
+            // searching for one by name still lands on the setting that offers it.
+            Kind::Number(n, value, picks) => out.push(Entry {
+                path: under(&item.label),
+                help: item.help,
+                shortcut: item.shortcut,
+                // Setting it to what it is: running the row does nothing, because the
+                // slider beside it is what moves a number.
+                action: Action::Set(*n, *value),
+                kind: EntryKind::Number(*n, *value, picks.clone()),
+                enabled: item.enabled,
+                reset: (shipped.number(*n) != *value).then(|| Action::Set(*n, shipped.number(*n))),
+            }),
+            Kind::Command(a) | Kind::Check(a, _) | Kind::Radio(a, _) => out.push(Entry {
+                path: under(&item.label),
+                help: item.help,
+                shortcut: item.shortcut,
+                action: a.clone(),
+                kind: match &item.kind {
+                    Kind::Check(_, on) => EntryKind::Check(*on),
+                    Kind::Radio(_, chosen) => EntryKind::Radio(*chosen),
+                    _ => EntryKind::Command,
+                },
+                enabled: item.enabled,
+                reset: match (&item.kind, a) {
+                    (Kind::Check(_, on), Action::Toggle(f)) if *on != shipped.flag(*f) => {
+                        Some(Action::Toggle(*f))
+                    }
+                    _ => None,
+                },
+            }),
         }
     }
+}
+
+/// The value of a group the app ships with, where the group is one of the settings.
+///
+/// Capture, the followed player and the presentation mode are choices too, and none of
+/// them is a setting with a shipped value, so they have nothing to be put back to.
+fn shipped_pick<'a>(picks: &'a [Pick], shipped: &Settings) -> Option<&'a Pick> {
+    picks.iter().find(|p| match &p.action {
+        Action::Choose(c) => c.is_current(shipped),
+        _ => false,
+    })
 }
 
 /// The commands whose path, help or key matches `query`, in the order they appear in the
@@ -1739,12 +2098,7 @@ pub fn search(items: &[Item], query: &str) -> Vec<Entry> {
     let q = query.trim().to_lowercase();
     entries(items)
         .into_iter()
-        .filter(|e| {
-            q.is_empty()
-                || e.path.to_lowercase().contains(&q)
-                || e.help.to_lowercase().contains(&q)
-                || e.shortcut.is_some_and(|k| k.to_lowercase().contains(&q))
-        })
+        .filter(|e| e.matches(&q))
         .collect()
 }
 
@@ -1818,9 +2172,13 @@ mod tests {
 
     #[test]
     fn setting_the_visual_delay_by_hand_stops_it_following_the_system() {
-        let mut s = Settings::default();
+        // Following the system is what this is about, so it starts there whatever the
+        // app ships with.
+        let mut s = Settings {
+            auto_visual_delay: true,
+            ..Settings::default()
+        };
         let mut session = Session::default();
-        assert!(s.auto_visual_delay);
         // Another number leaves the automatic alone.
         apply(
             &Action::Set(Number::PhosphorMs, 200.0),
@@ -1854,7 +2212,7 @@ mod tests {
         let session = Session::default();
         let labels = |ctx: &Context<'_>| {
             let items = tree(ctx);
-            let Some(Kind::Submenu(children)) = items
+            let Some(Kind::Submenu(children)) = flatten(&items)
                 .iter()
                 .find(|i| i.label == "Visual delay")
                 .map(|i| i.kind.clone())
@@ -1885,23 +2243,22 @@ mod tests {
         let found = entries(&items);
         let grid = found
             .iter()
-            .find(|e| e.path == "Axes and labels > Grid")
+            .find(|e| e.path == "Scales and labels > Grid")
             .expect("the grid switch");
         assert_eq!(grid.action, Action::Toggle(Flag::ShowGrid));
-        // The palette in the settings is the one the menu marks.
-        let items_flat = flatten(&items);
-        let chosen: Vec<&Item> = items_flat
+        // The palette in the settings is the one the menu marks, and the one its help
+        // row reads as its value.
+        let palette = found
             .iter()
-            .copied()
-            .filter(|i| {
-                matches!(
-                    i.kind,
-                    Kind::Radio(Action::Choose(Choice::Palette(_)), true)
-                )
-            })
-            .collect();
+            .find(|e| e.path == "Spectrogram > Palette")
+            .expect("the palette choice");
+        let chosen: Vec<&Pick> = palette.picks().iter().filter(|p| p.chosen).collect();
         assert_eq!(chosen.len(), 1);
         assert_eq!(chosen[0].label, PaletteKind::Turbo.display_name());
+        assert_eq!(
+            palette.kind.value().as_deref(),
+            Some(PaletteKind::Turbo.display_name())
+        );
     }
 
     #[test]
@@ -1994,25 +2351,31 @@ mod tests {
 
         let grid = found
             .iter()
-            .find(|e| e.path == "Axes and labels > Grid")
+            .find(|e| e.path == "Scales and labels > Grid")
             .expect("the grid switch");
         assert_eq!(grid.kind, EntryKind::Check(true));
-        assert_eq!(grid.section(), "Axes and labels");
+        assert_eq!(grid.section(), "Scales and labels");
         assert_eq!(grid.leaf(), "Grid");
         assert!(grid.enabled);
 
-        // The palette in use is the chosen one, and the others are not.
+        // A whole choice is one row, carrying every value it offers and which of them
+        // is in use, rather than a row apiece.
         let palettes: Vec<&Entry> = found
             .iter()
-            .filter(|e| matches!(e.action, Action::Choose(Choice::Palette(_))))
+            .filter(|e| matches!(e.kind, EntryKind::Choice(_)) && e.leaf() == "Palette")
             .collect();
-        let chosen: Vec<&str> = palettes
+        assert_eq!(palettes.len(), 1);
+        assert_eq!(palettes[0].picks().len(), PaletteKind::ALL.len());
+        let chosen: Vec<&str> = palettes[0]
+            .picks()
             .iter()
-            .filter(|e| e.kind == EntryKind::Radio(true))
-            .map(|e| e.leaf())
+            .filter(|p| p.chosen)
+            .map(|p| p.label.as_str())
             .collect();
         assert_eq!(chosen, [PaletteKind::Turbo.display_name()]);
-        assert!(palettes.len() > 1);
+        // And searching still finds it by the value's own name.
+        assert!(palettes[0].matches("turbo"));
+        assert!(palettes[0].matches("viridis"));
 
         // An item at the top of the menu belongs to no submenu.
         let freeze = found
@@ -2207,26 +2570,111 @@ mod tests {
     }
 
     #[test]
-    fn the_nearest_size_is_the_one_marked() {
-        // 18% is offered; a preset that moved it to 26 marks 26, and an odd value from
-        // an old file marks whichever entry is closest.
-        let s = Settings {
-            curve_width_pct: 23,
-            ..Settings::default()
+    fn a_changed_row_carries_what_puts_it_back() {
+        let shipped = Settings::default();
+        let mut s = shipped.clone();
+        s.set_flag(Flag::ShowGrid, !shipped.show_grid);
+        s.palette = if shipped.palette == PaletteKind::Turbo {
+            PaletteKind::Viridis
+        } else {
+            PaletteKind::Turbo
         };
+        s.set_number(Number::Tilt, 4.25);
         let session = Session::default();
         let items = tree(&context(&s, &session));
-        let marked: Vec<String> = flatten(&items)
-            .iter()
-            .filter(|i| {
-                matches!(
-                    i.kind,
-                    Kind::Radio(Action::Set(Number::CurveWidthPct, _), true)
-                )
-            })
-            .map(|i| i.label.clone())
-            .collect();
-        assert_eq!(marked, vec!["26% of the pane".to_owned()]);
+        let found = entries(&items);
+        let at = |path: &str| {
+            found
+                .iter()
+                .find(|e| e.path == path)
+                .unwrap_or_else(|| panic!("{path}"))
+        };
+
+        // Three kinds of setting, each knowing its own way home.
+        let back: Vec<Action> = [
+            "Scales and labels > Grid",
+            "Spectrogram > Palette",
+            "Analysis > Tilt",
+        ]
+        .iter()
+        .map(|p| {
+            let e = at(p);
+            assert!(e.changed(), "{p} should read as changed");
+            e.reset
+                .clone()
+                .unwrap_or_else(|| panic!("{p} has no way back"))
+        })
+        .collect();
+        let mut put_back = s.clone();
+        let mut session = Session::default();
+        for action in &back {
+            apply(action, &mut put_back, &mut session);
+        }
+        assert_eq!(put_back.show_grid, shipped.show_grid);
+        assert_eq!(put_back.palette, shipped.palette);
+        assert_eq!(put_back.tilt_db_per_octave, shipped.tilt_db_per_octave);
+
+        // Nothing that is already where it ships has one, and neither has anything that
+        // is not a setting at all.
+        let untouched = tree(&context(&shipped, &Session::default()));
+        assert!(
+            entries(&untouched).iter().all(|e| !e.changed()),
+            "the shipped settings read as changed: {:?}",
+            entries(&untouched)
+                .iter()
+                .filter(|e| e.changed())
+                .map(|e| e.path.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_choice_is_one_row_and_a_number_is_one_row() {
+        let s = Settings::default();
+        let session = Session::default();
+        let found = entries(&tree(&context(&s, &session)));
+        // Every value of every group used to be a row of its own, which ran to well
+        // over two hundred. One row each keeps the list skimmable.
+        assert!(
+            found.len() < 160,
+            "the help list has grown back to {} rows",
+            found.len()
+        );
+        // And no two rows share a path, which is what a collapsed group must not undo.
+        let mut paths: Vec<&str> = found.iter().map(|e| e.path.as_str()).collect();
+        paths.sort_unstable();
+        let before = paths.len();
+        paths.dedup();
+        assert_eq!(paths.len(), before, "two rows share a path");
+    }
+
+    #[test]
+    fn a_size_is_marked_only_when_it_is_the_value() {
+        let marked = |pct: i32| {
+            let s = Settings {
+                curve_width_pct: pct,
+                ..Settings::default()
+            };
+            let session = Session::default();
+            let items = tree(&context(&s, &session));
+            flatten(&items)
+                .iter()
+                .find_map(|i| match &i.kind {
+                    Kind::Number(Number::CurveWidthPct, _, picks) => Some(
+                        picks
+                            .iter()
+                            .filter(|p| p.chosen)
+                            .map(|p| p.label.clone())
+                            .collect::<Vec<_>>(),
+                    ),
+                    _ => None,
+                })
+                .expect("the curve width item")
+        };
+        assert_eq!(marked(26), vec!["26% of the pane".to_owned()]);
+        // 23 is between two of the named widths, so neither claims it; the slider in
+        // the same submenu is what says where it really is.
+        assert!(marked(23).is_empty());
     }
 
     #[test]

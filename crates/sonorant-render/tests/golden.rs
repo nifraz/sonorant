@@ -114,11 +114,14 @@ fn row_levels(row: u32) -> (Vec<f16>, Vec<f16>) {
 
 /// Draws the whole scene the app draws, offscreen, and returns the pixels.
 fn render(device: &wgpu::Device, queue: &wgpu::Queue) -> (u32, u32, Vec<u8>) {
+    // Nostalgia+'s baseline with three things named over it, rather than the app's own
+    // defaults: this picture is a check that every pass still draws what it drew, so
+    // the scene it draws has to stay still even when the shipped settings move.
     let settings = Settings {
         palette: PaletteKind::Magma,
         curve_width_pct: 45,
         mirror_left_pane: true,
-        ..Settings::default()
+        ..Settings::nostalgia_plus()
     };
     let lut = palette::build_lut(settings.palette);
 

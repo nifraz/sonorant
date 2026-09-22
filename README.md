@@ -23,9 +23,9 @@ for x86-64 and arm64, and a zip for Windows. What each phase still leaves open i
 
 ![Both channels scrolling, with the spectrum beside each pane](packaging/screenshots/main.png)
 
-*The default view: a note-scale spectrogram of each channel, its spectrum in the gutter
-beside it, the waveform lanes below and the deck between them. The picture is a reference
-signal, a chord over a kick and hat with a 200 Hz to 9 kHz sweep across it.*
+*One arrangement of the panes: a note-scale spectrogram of each channel, its spectrum in
+the gutter beside it, the waveform lanes below and the deck between them. The picture is
+a reference signal, a chord over a kick and hat with a 200 Hz to 9 kHz sweep across it.*
 
 | Part | State |
 |---|---|
@@ -92,14 +92,24 @@ cargo run --release -- capture --seconds 10   # no window: print loudness once a
 cargo run --release -- apps                   # the apps that can be captured alone
 ```
 
-Right-click for the menu: presets, what is captured, and every setting, each with its
-key alongside it and a line saying what it does. It stays open while you use it, so a
-switch takes effect in the picture behind it and the next one can be tried against the
-last; `Esc`, a click outside or `Close menu` at the foot of it puts it away.
+Right-click for the menu. At the top are the presets and what is being listened to;
+then seven groups that are the picture itself, Analysis, Spectrogram, Spectrum, Scales
+and labels, Panels, Look and immersion and Performance; then the things done to a running
+picture, which carry the keys; then help, reset and quit. Every row says what it is set
+to beside its name, so a submenu can be read without opening it, and every number has the
+sizes worth coming back to, a slider for anything between them, and a box to type an
+exact figure into. It stays open while you use it, so a switch takes effect in the picture
+behind it and the next one can be tried against the last; `Esc`, a click outside, going to
+another window, or `Close menu` at the foot of it puts it away.
 
-**F1** opens the same list as a window you can search, grouped under the submenu each
-command lives in, with every switch's state beside it and the keys gathered at the top.
-Clicking a row does the thing; so do the arrow keys and `Enter`, and `Esc` closes it.
+**F1** opens the same tree as a window in two pages. **Commands** is a settings sheet you
+can search: one row per setting, grouped under where it lives, with the switch, the
+dropdown or the slider on the row itself, so it is changed here rather than looked up
+here. Narrow it to what differs from the defaults, to switches that are on, or to what a
+key reaches; a row that differs carries a small arrow that puts that one setting back.
+The arrow keys and `Enter` drive the list, and `Esc` closes it. **How it works** is the
+part the menu cannot say: what the panes, the gutter, the strip and the deck are, and
+what the wheel, a drag and a double-click do to them.
 
 | Key | |
 |---|---|
@@ -108,6 +118,7 @@ Clicking a row does the thing; so do the arrow keys and `Enter`, and `Esc` close
 | `I` | Immersive mode: the glow, the beat flare, a fading chrome and the palette drifting with the music's brightness |
 | `A` | Hold the average spectrum in amber to compare against, or drop it |
 | `O` | The on-screen readouts: the hover box, the quick bar and the status line |
+| `3` | The 3D waterfall |
 | `G` | The frequency grid |
 | `W` | The waveform lanes |
 | `P` | The peak trace |
@@ -116,8 +127,8 @@ Clicking a row does the thing; so do the arrow keys and `Enter`, and `Esc` close
 
 Point at a pane to read out the frequency under the pointer, as hertz and as a note with
 its deviation in cents, each channel's level there, and how far back in time the column
-is. `Hover` in the menu adds ghost lines at the harmonics of that frequency and stamps
-the reading onto the axis. Double-clicking a column of the image sends the player to that
+is. `Hover readout` under `Scales and labels` adds ghost lines at the harmonics of that
+frequency and stamps the reading onto the axis. Double-clicking a column of the image sends the player to that
 moment, and the deck's transport buttons and seek bar work on whatever player is being
 followed. The strip of buttons over the image is the quick bar, for the switches reached
 most often; it can be made compact or switched off.
@@ -141,7 +152,13 @@ there to be nudged. Setting it by hand turns the automatic off. Nothing reports 
 Windows, where the switch is greyed out.
 
 Settings live in `%APPDATA%\Sonorant` or `~/.config/sonorant`, and are saved on exit.
-Presets you save go beside them, and the menu loads and deletes them. On the first run on
+There are thirteen presets: `Default`, which is what the app ships with and what `Reset
+every setting` puts back; `Studio`, `Immersive` and `Club` for watching; `Vocal`,
+`Speech`, `Bass`, `Percussion` and `Classical` for a kind of material; `QC`, `Mastering`
+and `Broadcast` for work; and `Nostalgia`, the original plugin's look. The eight that came
+from Nostalgia+ are unchanged and still match the files it exported. Presets you save go
+beside them, and the menu loads and deletes them. Switching away from changes you have
+not saved asks first, and offers to save them. On the first run on
 Windows, Nostalgia+'s settings, presets and themes are brought over from MusicBee. The
 desktop's accent colour and its dark or light preference stand in for the skin colours
 the MusicBee plugin took from its host.

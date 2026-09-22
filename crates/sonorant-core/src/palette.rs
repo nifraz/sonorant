@@ -1,9 +1,16 @@
 //! Colour ramps for the spectrogram, as 256-entry lookup tables.
 //!
-//! Magma, Inferno and Viridis are perceptually uniform: equal steps in level read as
-//! equal steps in brightness, so two points in the picture can be compared by eye. The
-//! Cool Edit ramp survives as Nostalgia Red; it saturates early by design, which is
-//! charming and imprecise.
+//! Magma, Inferno, Viridis, Plasma and Cividis are perceptually uniform: equal steps in
+//! level read as equal steps in brightness, so two points in the picture can be compared
+//! by eye. Cividis is the one that survives colour-vision deficiency: it is built from
+//! blue and yellow alone, which no common deficiency confuses. The Cool Edit ramp
+//! survives as Nostalgia Red; it saturates early by design, which is charming and
+//! imprecise, and Ember, Ocean and Phosphor are of the same family: chosen to look like
+//! something rather than to measure.
+//!
+//! **New ramps go on the end.** Nostalgia+ wrote the palette as a number as well as a
+//! name, and the importer still reads both, so inserting one in the middle would change
+//! what an old settings file means.
 
 use std::fmt;
 
@@ -19,10 +26,16 @@ pub enum PaletteKind {
     NostalgiaRed,
     Ice,
     Grey,
+    Plasma,
+    Cividis,
+    Twilight,
+    Ocean,
+    Phosphor,
+    Ember,
 }
 
 impl PaletteKind {
-    pub const ALL: [PaletteKind; 7] = [
+    pub const ALL: [PaletteKind; 13] = [
         PaletteKind::Magma,
         PaletteKind::Inferno,
         PaletteKind::Viridis,
@@ -30,6 +43,12 @@ impl PaletteKind {
         PaletteKind::NostalgiaRed,
         PaletteKind::Ice,
         PaletteKind::Grey,
+        PaletteKind::Plasma,
+        PaletteKind::Cividis,
+        PaletteKind::Twilight,
+        PaletteKind::Ocean,
+        PaletteKind::Phosphor,
+        PaletteKind::Ember,
     ];
 
     /// The name used in settings files.
@@ -42,6 +61,12 @@ impl PaletteKind {
             PaletteKind::NostalgiaRed => "NostalgiaRed",
             PaletteKind::Ice => "Ice",
             PaletteKind::Grey => "Grey",
+            PaletteKind::Plasma => "Plasma",
+            PaletteKind::Cividis => "Cividis",
+            PaletteKind::Twilight => "Twilight",
+            PaletteKind::Ocean => "Ocean",
+            PaletteKind::Phosphor => "Phosphor",
+            PaletteKind::Ember => "Ember",
         }
     }
 
@@ -55,7 +80,29 @@ impl PaletteKind {
     pub fn display_name(self) -> &'static str {
         match self {
             PaletteKind::NostalgiaRed => "Nostalgia Red",
+            PaletteKind::Phosphor => "Phosphor Green",
             other => other.name(),
+        }
+    }
+
+    /// One line on what the ramp is for, as the menu and help explain it.
+    pub fn about(self) -> &'static str {
+        match self {
+            PaletteKind::Magma => "Perceptually even, black through purple to cream",
+            PaletteKind::Inferno => "Perceptually even, and hotter than Magma at the top",
+            PaletteKind::Viridis => "Perceptually even, blue through green to yellow",
+            PaletteKind::Turbo => "The rainbow, made even. Loud, and easy to read levels off",
+            PaletteKind::NostalgiaRed => "Cool Edit's ramp: saturates early, by design",
+            PaletteKind::Ice => "Black through blue to white",
+            PaletteKind::Grey => "Black to white, and nothing else",
+            PaletteKind::Plasma => "Perceptually even, blue through pink to yellow",
+            PaletteKind::Cividis => {
+                "Perceptually even, and readable with any colour-vision deficiency"
+            }
+            PaletteKind::Twilight => "Dark at both ends, so the middle of the range stands out",
+            PaletteKind::Ocean => "Black through teal to a pale sky",
+            PaletteKind::Phosphor => "The green of an old analyser screen",
+            PaletteKind::Ember => "A fire seen in the dark: deep red through orange to white",
         }
     }
 
@@ -68,6 +115,12 @@ impl PaletteKind {
             PaletteKind::NostalgiaRed => NOSTALGIA_RED,
             PaletteKind::Ice => ICE,
             PaletteKind::Grey => GREY,
+            PaletteKind::Plasma => PLASMA,
+            PaletteKind::Cividis => CIVIDIS,
+            PaletteKind::Twilight => TWILIGHT,
+            PaletteKind::Ocean => OCEAN,
+            PaletteKind::Phosphor => PHOSPHOR,
+            PaletteKind::Ember => EMBER,
         }
     }
 }
@@ -225,6 +278,100 @@ const ICE: &[Stop] = &[
 ];
 
 const GREY: &[Stop] = &[s(0.00, 0, 0, 0), s(1.00, 255, 255, 255)];
+
+const PLASMA: &[Stop] = &[
+    s(0.00, 13, 8, 135),
+    s(0.06, 43, 4, 142),
+    s(0.13, 65, 4, 146),
+    s(0.19, 86, 1, 145),
+    s(0.25, 106, 0, 138),
+    s(0.31, 125, 3, 128),
+    s(0.38, 143, 13, 116),
+    s(0.44, 159, 29, 104),
+    s(0.50, 174, 44, 93),
+    s(0.56, 188, 60, 83),
+    s(0.63, 201, 76, 73),
+    s(0.69, 213, 93, 63),
+    s(0.75, 224, 111, 53),
+    s(0.81, 234, 131, 43),
+    s(0.88, 242, 152, 33),
+    s(0.94, 248, 176, 24),
+    s(0.97, 251, 201, 27),
+    s(1.00, 240, 249, 33),
+];
+
+const CIVIDIS: &[Stop] = &[
+    s(0.00, 0, 34, 78),
+    s(0.06, 0, 42, 92),
+    s(0.13, 0, 51, 104),
+    s(0.19, 22, 60, 106),
+    s(0.25, 44, 69, 105),
+    s(0.31, 60, 78, 105),
+    s(0.38, 74, 87, 106),
+    s(0.44, 86, 96, 108),
+    s(0.50, 98, 105, 111),
+    s(0.56, 110, 114, 114),
+    s(0.63, 122, 123, 117),
+    s(0.69, 135, 133, 116),
+    s(0.75, 148, 143, 113),
+    s(0.81, 162, 154, 108),
+    s(0.88, 177, 165, 100),
+    s(0.94, 193, 177, 90),
+    s(0.97, 210, 190, 77),
+    s(1.00, 253, 231, 55),
+];
+
+/// Dark at both ends and bright through the middle, so a band sitting in the middle of
+/// the range is the thing the eye lands on. The only ramp here that is not monotonic in
+/// brightness, which is the point of it and also why it is no good for reading a level.
+const TWILIGHT: &[Stop] = &[
+    s(0.00, 18, 12, 32),
+    s(0.10, 36, 32, 76),
+    s(0.20, 52, 62, 118),
+    s(0.30, 72, 98, 150),
+    s(0.40, 114, 138, 172),
+    s(0.50, 176, 176, 184),
+    s(0.60, 198, 152, 150),
+    s(0.70, 196, 114, 110),
+    s(0.80, 172, 74, 82),
+    s(0.90, 118, 42, 66),
+    s(1.00, 42, 16, 38),
+];
+
+const OCEAN: &[Stop] = &[
+    s(0.00, 0, 6, 12),
+    s(0.18, 0, 34, 52),
+    s(0.36, 0, 68, 88),
+    s(0.54, 0, 110, 118),
+    s(0.70, 16, 156, 148),
+    s(0.83, 88, 200, 186),
+    s(0.93, 168, 228, 222),
+    s(1.00, 236, 252, 252),
+];
+
+const PHOSPHOR: &[Stop] = &[
+    s(0.00, 0, 4, 0),
+    s(0.20, 0, 32, 8),
+    s(0.40, 0, 72, 16),
+    s(0.60, 16, 128, 28),
+    s(0.76, 64, 184, 48),
+    s(0.88, 138, 226, 96),
+    s(0.96, 204, 246, 168),
+    s(1.00, 244, 255, 232),
+];
+
+const EMBER: &[Stop] = &[
+    s(0.00, 4, 0, 0),
+    s(0.16, 40, 4, 4),
+    s(0.32, 88, 10, 6),
+    s(0.48, 140, 26, 8),
+    s(0.62, 190, 52, 8),
+    s(0.74, 226, 92, 12),
+    s(0.84, 245, 140, 28),
+    s(0.92, 252, 190, 74),
+    s(0.97, 254, 226, 150),
+    s(1.00, 255, 248, 230),
+];
 
 /// Rounds half to even, as .NET's `Math.Round` did, so every entry matches Nostalgia+.
 fn round8(v: f64) -> u8 {

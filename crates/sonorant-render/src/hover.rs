@@ -61,8 +61,9 @@ pub fn locate(
         .iter()
         .enumerate()
         .find(|(_, p)| p.bounds.contains(x, y))?;
-    // The scale lane is chrome, not the axis: a frequency read from it would be wrong.
-    if pane.lane.contains(x, y) {
+    // A scale strip is chrome, not the axis: a frequency read from one would be wrong.
+    // Both ends are checked, because the strip can be reserved at both.
+    if pane.lanes().any(|lane| lane.contains(x, y)) {
         return None;
     }
     let body = pane.spectro;
@@ -153,7 +154,12 @@ pub fn draw(o: &mut Overlay, r: &Readout<'_>) {
     if s.show_hover_pin {
         pin(o, r, ink);
     }
-    box_(o, r, ink);
+    // The box is the one part that covers the picture, so it has a switch of its own:
+    // the crosshair, the ruler and the pin all read against the image rather than over
+    // it, and someone who wants to see what is under the pointer wants them kept.
+    if s.show_hud {
+        box_(o, r, ink);
+    }
 }
 
 /// Ghost lines at whole multiples of the hovered frequency, fading as they climb: a
@@ -322,6 +328,7 @@ fn row_y(map: &FrequencyMap, body: Rect, f: f64) -> i32 {
 mod tests {
     use super::*;
     use sonorant_core::dsp::FreqScale;
+    use sonorant_core::settings::ScaleLanePosition;
 
     fn layout() -> ScopeLayout {
         ScopeLayout::new(Rect::new(0, 0, 1200, 600), &Settings::default(), 1.0)
@@ -424,12 +431,25 @@ mod tests {
 
     #[test]
     fn the_scale_lane_is_chrome_rather_than_axis() {
-        let l = layout();
-        let pane = &l.panes[0];
-        let map = FrequencyMap::new(FreqScale::Note, pane.spectro.h as usize, 20.0, 20000.0);
-        assert!(pane.lane.h > 0, "the default settings reserve a lane");
-        let at = (pane.spectro.x + 5, pane.lane.y + pane.lane.h / 2);
-        assert!(locate(&l, &map, at, 1.0, 60.0, 0.0).is_none());
+        for &pos in ScaleLanePosition::ALL {
+            let s = Settings {
+                scale_lane_pos: pos,
+                ..Settings::default()
+            };
+            let l = ScopeLayout::new(Rect::new(0, 0, 1200, 600), &s, 1.0);
+            let pane = &l.panes[0];
+            let map = FrequencyMap::new(FreqScale::Note, pane.spectro.h as usize, 20.0, 20000.0);
+            let lanes: Vec<Rect> = pane.lanes().collect();
+            assert_eq!(
+                lanes.len(),
+                if pos == ScaleLanePosition::Both { 2 } else { 1 },
+                "{pos:?} reserves the wrong number of strips"
+            );
+            for lane in lanes {
+                let at = (pane.spectro.x + 5, lane.y + lane.h / 2);
+                assert!(locate(&l, &map, at, 1.0, 60.0, 0.0).is_none(), "{pos:?}");
+            }
+        }
     }
 
     #[test]

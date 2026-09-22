@@ -7,8 +7,10 @@
 //! the keyboard sends its keys, so both go through the same door.
 
 use sonorant_core::media::{Controls, Player};
-use sonorant_core::menu::{self, Action, Context, Effect, Item, Kind, Presentation, Session};
-use sonorant_core::settings::{Settings, sanitise_name};
+use sonorant_core::menu::{
+    self, Action, Context, Effect, Entry, EntryKind, Item, Kind, Pick, Presentation, Session,
+};
+use sonorant_core::settings::{Number, Settings, sanitise_name};
 
 use crate::pacing::PacingStats;
 use crate::present::PresentCounts;
@@ -76,6 +78,60 @@ pub struct Shell {
     /// Set when the help window opens, so the search box takes the focus once.
     focus_search: bool,
     asks: Vec<Ask>,
+    /// The settings as they were when they last came from somewhere they can be got
+    /// back from: a preset, a save, a reset, or the settings file at start-up.
+    ///
+    /// What [`Shell::unsaved`] compares against. `Settings::preset` cannot answer this
+    /// on its own, because loading a preset of your own replaces the whole struct and
+    /// brings whatever `preset` was written into that file along with it.
+    saved: Option<Settings>,
+    /// A switch the user has to answer before it happens, because it would throw the
+    /// changes away: the action, and the name of what is being switched to.
+    confirming: Option<(Action, String)>,
+    /// What to do once the name dialog has saved, where saving was the answer to that
+    /// warning rather than something asked for on its own.
+    after_saving: Option<Action>,
+    /// Set where something opened a window the menu would be in front of.
+    close_the_menu: bool,
+    /// Which of the help window's two pages is showing.
+    page: Page,
+    /// The help window's filters, none of which are on to begin with.
+    filter: Filter,
+}
+
+/// The help window's two pages.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Page {
+    #[default]
+    Commands,
+    HowItWorks,
+}
+
+/// What the help window is narrowed to, beside the search box.
+///
+/// Three switches rather than one setting, because they answer different questions and
+/// asking two at once is reasonable: "what have I changed that has a key?" is a fair
+/// thing to want.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Filter {
+    /// Only what differs from the settings the app ships with.
+    changed: bool,
+    /// Only switches that are on.
+    on: bool,
+    /// Only what a key reaches.
+    keyed: bool,
+}
+
+impl Filter {
+    fn any(self) -> bool {
+        self.changed || self.on || self.keyed
+    }
+
+    fn keeps(self, e: &Entry) -> bool {
+        (!self.changed || e.changed())
+            && (!self.on || matches!(e.kind, EntryKind::Check(true)))
+            && (!self.keyed || e.shortcut.is_some())
+    }
 }
 
 impl Shell {
@@ -94,17 +150,76 @@ impl Shell {
         std::mem::take(&mut self.asks)
     }
 
+    /// Puts the right-click menu away, wherever in its tree it is open.
+    ///
+    /// The menu is egui's to hold, not the model's, so this is the one way to close it
+    /// from outside a click on one of its items. The right-click menu and its submenus
+    /// are the only popups the app raises: help and the name dialog are windows, and
+    /// closing every popup is how a submenu goes with its parent.
+    pub fn close_menu(&self, ctx: &egui::Context) {
+        egui::Popup::close_all(ctx);
+    }
+
+    /// Takes the settings as a place that can be got back to.
+    ///
+    /// Called at start-up and after a preset is loaded or written, which are the two
+    /// the app carries out rather than the model. Everything else that lands on a known
+    /// set of settings does it in [`Shell::run`].
+    pub fn settled(&mut self, settings: &Settings) {
+        self.saved = Some(settings.clone());
+    }
+
+    /// Whether the settings have moved since they last came from somewhere.
+    pub fn unsaved(&self, settings: &Settings) -> bool {
+        self.saved.as_ref().is_some_and(|was| was != settings)
+    }
+
     /// Performs one action, and holds on to anything the app has to finish.
     ///
-    /// This is the one way in: the menu, the keys and the deck's buttons all come
-    /// through here.
+    /// This is the one way in: the menu, the keys, the help window and the deck's
+    /// buttons all come through here, which is why the warning below can sit here and
+    /// cover every one of them.
     pub fn act(&mut self, action: &Action, settings: &mut Settings) {
+        if let Some(what) = self.would_lose_changes(action, settings) {
+            self.confirming = Some((action.clone(), what));
+            // The dialog is a window, and the menu would be in front of it.
+            self.close_the_menu = true;
+            return;
+        }
+        self.run(action, settings);
+    }
+
+    /// What `action` would switch to, where doing it would throw away changes.
+    ///
+    /// Only the three that replace every setting at once: the built-in presets, a
+    /// preset of your own, and the reset. Quitting is not among them, because the
+    /// settings are written on the way out, so nothing is lost by leaving.
+    fn would_lose_changes(&self, action: &Action, settings: &Settings) -> Option<String> {
+        if !self.unsaved(settings) {
+            return None;
+        }
+        match action {
+            Action::UsePreset(p) => Some(p.name().to_owned()),
+            Action::LoadPreset(name) => Some(name.clone()),
+            Action::ResetSettings => Some("the settings the app ships with".to_owned()),
+            _ => None,
+        }
+    }
+
+    /// Performs an action with no questions asked: the warning has been answered, or
+    /// there was nothing to warn about.
+    fn run(&mut self, action: &Action, settings: &mut Settings) {
         match menu::apply(action, settings, &mut self.session) {
             Some(Effect::LoadPreset(name)) => self.asks.push(Ask::Load(name)),
             Some(Effect::DeletePreset(name)) => self.asks.push(Ask::Delete(name)),
             // The name has to be asked for before anything can be saved.
             Some(Effect::SavePreset) => self.naming = Some((String::new(), None)),
             None => {}
+        }
+        // A preset or a reset is a place that can be got back to, so the settings are
+        // no longer unsaved the moment one lands.
+        if matches!(action, Action::UsePreset(_) | Action::ResetSettings) {
+            self.saved = Some(settings.clone());
         }
         if matches!(action, Action::Help) && self.session.help {
             self.focus_search = true;
@@ -167,20 +282,106 @@ impl Shell {
         if let Some(action) = chosen {
             self.act(&action, settings);
         }
+        self.confirm(ui.ctx(), settings, what);
         self.help(ui.ctx(), settings, what, area.menu_open);
-        self.name_dialog(ui.ctx(), what.presets);
+        self.name_dialog(ui.ctx(), what.presets, settings);
+        if std::mem::take(&mut self.close_the_menu) {
+            self.close_menu(ui.ctx());
+            area.menu_open = false;
+        }
         area
+    }
+
+    /// The warning before a switch that would throw away changes.
+    ///
+    /// Three ways out, because there are three things a person means by "wait": keep
+    /// these first, go ahead anyway, or never mind. Saving is offered rather than only
+    /// warned about, because a warning you can only obey by cancelling, finding the
+    /// save item yourself and coming back is a warning that teaches people to click
+    /// past it.
+    fn confirm(&mut self, ctx: &egui::Context, settings: &mut Settings, what: &Around<'_>) {
+        let Some((action, target)) = self.confirming.clone() else {
+            return;
+        };
+        let changed = self.changed_since_saved(settings, what);
+        let mut save = false;
+        let mut go = false;
+        let mut cancel = false;
+        let answer = egui::Modal::new(egui::Id::new("unsaved")).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.heading("These settings are not saved");
+            ui.add_space(6.0);
+            ui.label(match changed {
+                0 | 1 => format!("One setting has changed. Switching to {target} will lose it."),
+                n => format!("{n} settings have changed. Switching to {target} will lose them."),
+            });
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                save = ui.button("Save as a preset...").clicked();
+                go = ui.button("Switch anyway").clicked();
+                cancel = ui.button("Cancel").clicked();
+            });
+            cancel |= ui.input(|i| i.key_pressed(egui::Key::Escape));
+        });
+        if answer.should_close() {
+            cancel = true;
+        }
+        if save {
+            // The switch waits for the name dialog: saving is what was asked for, and
+            // it would be a poor answer to write the preset and then not go.
+            self.confirming = None;
+            self.after_saving = Some(action);
+            self.naming = Some((String::new(), None));
+        } else if go {
+            self.confirming = None;
+            self.run(&action, settings);
+        } else if cancel {
+            self.confirming = None;
+        }
+    }
+
+    /// How many settings have moved since they last came from somewhere.
+    ///
+    /// Counted off the menu model, one reading against the other, because that is the
+    /// question the warning is about: not how far these settings are from the ones the
+    /// app ships with, but how much would be thrown away. Both readings come from the
+    /// same tree shape, so they line up row for row.
+    fn changed_since_saved(&self, settings: &Settings, what: &Around<'_>) -> usize {
+        let Some(was) = &self.saved else {
+            return 0;
+        };
+        let reading = |s: &Settings| {
+            menu::entries(&menu::tree(&Context {
+                settings: s,
+                session: &self.session,
+                players: what.players,
+                presets: what.presets,
+                controls: what.controls,
+                presentations: what.presentations,
+                reported_delay_ms: what.reported_delay_ms,
+            }))
+            .iter()
+            .map(|e| (e.path.clone(), e.kind.value()))
+            .collect::<Vec<_>>()
+        };
+        let (now, then) = (reading(settings), reading(was));
+        now.iter()
+            .zip(&then)
+            .filter(|(a, b)| a.0 == b.0 && a.1 != b.1)
+            .count()
     }
 
     /// The help window: every command, with its key, what it does and the state it is
     /// in.
     ///
-    /// It is a list to act on rather than a page to read. Clicking a row does the
-    /// thing, so help is a way to reach a command whose menu you can't remember, and
-    /// the ticks and dots down the left are the live settings, so the window doubles
-    /// as a reading of how the app is set. The rows are grouped under the submenu each
-    /// command lives in, which makes "where was that?" answerable by the same shape
-    /// the menu has.
+    /// It is a list to act on rather than a page to read. A row is the setting itself,
+    /// not a link to it: a switch has its box, a choice its dropdown, a number its
+    /// slider, so the window is a settings sheet that happens to be searchable, and
+    /// "where was that?" and "what have I changed?" have the same answer in it.
+    ///
+    /// A choice is one row and not one per value. It used to be one per value, which
+    /// made 257 rows of which four read "Which pair of channels the panes show", and a
+    /// list nobody can skim is a list nobody reads.
     ///
     /// `menu_open` keeps Escape honest: it takes one thing off at a time, and the
     /// right-click menu is in front of this.
@@ -208,145 +409,32 @@ impl Shell {
         let mut shut = false;
         // The name dialog wants Enter for itself, so the list lets go of the keyboard
         // while it is up rather than answering a key meant for the box in front.
-        let driving = self.naming.is_none();
+        let driving = self.naming.is_none() && self.confirming.is_none();
         egui::Window::new("Help")
             .open(&mut open)
-            .default_width(720.0)
-            .default_height(560.0)
+            .default_width(860.0)
+            .default_height(600.0)
             .show(ctx, |ui| {
-                // Taken before the search box is built: a text box swallows Enter and
-                // the arrows, and here they belong to the list under it.
-                let (up, down, run) = ui.input_mut(|i| {
-                    if !driving {
-                        return (false, false, false);
-                    }
-                    (
-                        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
-                        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
-                        i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
-                    )
-                });
-                if driving && !menu_open {
-                    shut |=
-                        ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
-                }
-
                 ui.horizontal(|ui| {
-                    ui.label("Search");
-                    let box_ = ui.add(
-                        egui::TextEdit::singleline(&mut self.query)
-                            .desired_width(260.0)
-                            .hint_text("a name, a key or a word from the description"),
-                    );
-                    // The window is opened to be typed into, but only on the frame it
-                    // opens: taking the focus back every frame would trap it.
-                    if std::mem::take(&mut self.focus_search) {
-                        box_.request_focus();
-                    }
-                    // A different list is a different first row.
-                    if box_.changed() {
-                        self.picked = 0;
-                    }
-                    if ui.button("Clear").clicked() {
-                        self.query.clear();
-                        self.picked = 0;
-                    }
-                    ui.label(
-                        egui::RichText::new("Arrows to move, Enter to do it, Esc to close").weak(),
-                    );
+                    ui.selectable_value(&mut self.page, Page::Commands, "Commands");
+                    ui.selectable_value(&mut self.page, Page::HowItWorks, "How it works");
                 });
                 ui.separator();
-
-                let sheet = menu::entries(&items);
-                let sheet: Vec<&menu::Entry> =
-                    sheet.iter().filter(|e| e.shortcut.is_some()).collect();
-                egui::CollapsingHeader::new(format!("Keys ({})", sheet.len()))
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        // Two pairs to a row: the list is short and wide rather than
-                        // long and thin, so it fits above the search results.
-                        egui::Grid::new("help-keys")
-                            .num_columns(4)
-                            .spacing([12.0, 4.0])
-                            .show(ui, |ui| {
-                                for pair in sheet.chunks(2) {
-                                    for entry in pair {
-                                        ui.label(chip(entry.shortcut));
-                                        ui.label(entry.leaf());
-                                    }
-                                    ui.end_row();
-                                }
-                            });
-                    });
-                ui.separator();
-
-                let found = menu::search(&items, &self.query);
-                if found.is_empty() {
-                    self.picked = 0;
-                } else {
-                    if down {
-                        self.picked += 1;
+                match self.page {
+                    Page::Commands => {
+                        shut |= self.commands(ui, &items, driving, menu_open, &mut chosen);
                     }
-                    if up {
-                        self.picked = self.picked.saturating_sub(1);
-                    }
-                    self.picked = self.picked.min(found.len() - 1);
-                }
-                if run
-                    && let Some(entry) = found.get(self.picked)
-                    && entry.enabled
-                {
-                    chosen = Some(entry.action.clone());
-                }
-                ui.label(match found.len() {
-                    0 => "Nothing matches".to_owned(),
-                    1 => "1 command".to_owned(),
-                    n => format!("{n} commands"),
-                });
-
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        egui::Grid::new("help-grid")
-                            .num_columns(4)
-                            .striped(true)
-                            .show(ui, |ui| {
-                                let mut section: Option<&str> = None;
-                                for (i, entry) in found.iter().enumerate() {
-                                    if section != Some(entry.section()) {
-                                        section = Some(entry.section());
-                                        ui.label(
-                                            egui::RichText::new(entry.section()).strong().heading(),
-                                        );
-                                        ui.label("");
-                                        ui.label("");
-                                        ui.label("");
-                                        ui.end_row();
-                                    }
-                                    if mark(ui, entry).is_some_and(|r| r.clicked()) {
-                                        self.picked = i;
-                                        chosen = Some(entry.action.clone());
-                                    }
-                                    let hit = ui.add_enabled(
-                                        entry.enabled,
-                                        egui::Button::new(highlight(ui, under(entry), &self.query))
-                                            .selected(i == self.picked),
-                                    );
-                                    // The keyboard's row is brought into view as it
-                                    // moves, or moving past the fold would lose it.
-                                    if i == self.picked && (up || down) {
-                                        hit.scroll_to_me(None);
-                                    }
-                                    if hit.clicked() {
-                                        self.picked = i;
-                                        chosen = Some(entry.action.clone());
-                                    }
-                                    ui.label(chip(entry.shortcut));
-                                    ui.label(highlight(ui, entry.help, &self.query));
-                                    ui.end_row();
-                                }
+                    Page::HowItWorks => {
+                        if driving && !menu_open {
+                            shut |= ui.input_mut(|i| {
+                                i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
                             });
-                    });
+                        }
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, how_it_works);
+                    }
+                }
             });
         if let Some(action) = chosen {
             self.act(&action, settings);
@@ -358,8 +446,178 @@ impl Shell {
         }
     }
 
+    /// The commands page: the keys, the search box and its filters, then the rows.
+    ///
+    /// Returns whether Escape was pressed for this window.
+    fn commands(
+        &mut self,
+        ui: &mut egui::Ui,
+        items: &[Item],
+        driving: bool,
+        menu_open: bool,
+        chosen: &mut Option<Action>,
+    ) -> bool {
+        // Taken before the search box is built: a text box swallows Enter and the
+        // arrows, and here they belong to the list under it.
+        let (up, down, run) = ui.input_mut(|i| {
+            if !driving {
+                return (false, false, false);
+            }
+            (
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+            )
+        });
+        let mut shut = false;
+        if driving && !menu_open {
+            shut |= ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        }
+
+        ui.horizontal(|ui| {
+            ui.label("Search");
+            let box_ = ui.add(
+                egui::TextEdit::singleline(&mut self.query)
+                    .desired_width(240.0)
+                    .hint_text("a name, a value, a key or a word from the description"),
+            );
+            // The window is opened to be typed into, but only on the frame it opens:
+            // taking the focus back every frame would trap it.
+            if std::mem::take(&mut self.focus_search) {
+                box_.request_focus();
+            }
+            // A different list is a different first row.
+            if box_.changed() {
+                self.picked = 0;
+            }
+            let was = self.filter;
+            ui.toggle_value(&mut self.filter.changed, "Changed")
+                .on_hover_text("Only what differs from the settings the app ships with");
+            ui.toggle_value(&mut self.filter.on, "On")
+                .on_hover_text("Only switches that are on");
+            ui.toggle_value(&mut self.filter.keyed, "Has a key")
+                .on_hover_text("Only what a key reaches");
+            if ui
+                .add_enabled(
+                    !self.query.is_empty() || self.filter.any(),
+                    egui::Button::new("Clear"),
+                )
+                .clicked()
+            {
+                self.query.clear();
+                self.filter = Filter::default();
+                self.picked = 0;
+            }
+            if was != self.filter {
+                self.picked = 0;
+            }
+        });
+        ui.label(
+            egui::RichText::new(
+                "Arrows to move, Enter to do it, Esc to close. A row is the setting \
+                 itself, so it can be changed here.",
+            )
+            .weak(),
+        );
+        ui.separator();
+
+        let sheet = menu::entries(items);
+        let keys: Vec<&Entry> = sheet.iter().filter(|e| e.shortcut.is_some()).collect();
+        egui::CollapsingHeader::new(format!("Keys ({})", keys.len()))
+            .default_open(true)
+            .show(ui, |ui| {
+                // Two pairs to a row: the list is short and wide rather than long and
+                // thin, so it fits above the search results.
+                egui::Grid::new("help-keys")
+                    .num_columns(4)
+                    .spacing([12.0, 4.0])
+                    .show(ui, |ui| {
+                        for pair in keys.chunks(2) {
+                            for entry in pair {
+                                ui.label(chip(entry.shortcut));
+                                ui.label(entry.leaf());
+                            }
+                            ui.end_row();
+                        }
+                    });
+            });
+        ui.separator();
+
+        let needle = self.query.trim().to_lowercase();
+        let found: Vec<&Entry> = sheet
+            .iter()
+            .filter(|e| e.matches(&needle) && self.filter.keeps(e))
+            .collect();
+        if found.is_empty() {
+            self.picked = 0;
+        } else {
+            if down {
+                self.picked += 1;
+            }
+            if up {
+                self.picked = self.picked.saturating_sub(1);
+            }
+            self.picked = self.picked.min(found.len() - 1);
+        }
+        if run
+            && let Some(entry) = found.get(self.picked)
+            && entry.enabled
+        {
+            *chosen = Some(entry.action.clone());
+        }
+        let changed = sheet.iter().filter(|e| e.changed()).count();
+        ui.horizontal(|ui| {
+            ui.label(match found.len() {
+                0 => "Nothing matches".to_owned(),
+                1 => "1 setting".to_owned(),
+                n => format!("{n} settings"),
+            });
+            if changed > 0 && !self.filter.changed {
+                ui.label(
+                    egui::RichText::new(format!("{changed} changed from the defaults")).weak(),
+                );
+            }
+        });
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Grid::new("help-grid")
+                    .num_columns(5)
+                    .striped(true)
+                    .spacing([10.0, 3.0])
+                    .show(ui, |ui| {
+                        let mut section: Option<&str> = None;
+                        for (i, entry) in found.iter().enumerate() {
+                            if section != Some(entry.section()) {
+                                section = Some(entry.section());
+                                ui.label("");
+                                ui.label(egui::RichText::new(entry.section()).strong());
+                                for _ in 0..3 {
+                                    ui.label("");
+                                }
+                                ui.end_row();
+                            }
+                            let hit = row(ui, entry, &self.query, i == self.picked, chosen);
+                            if let Some(hit) = hit {
+                                // The keyboard's row is brought into view as it moves,
+                                // or moving past the fold would lose it.
+                                if i == self.picked && (up || down) {
+                                    hit.scroll_to_me(None);
+                                }
+                                if hit.clicked() {
+                                    self.picked = i;
+                                }
+                            }
+                            ui.end_row();
+                        }
+                    });
+            });
+        shut
+    }
+
     /// The name dialog, for saving the settings as a preset of your own.
-    fn name_dialog(&mut self, ctx: &egui::Context, presets: &[String]) {
+    fn name_dialog(&mut self, ctx: &egui::Context, presets: &[String], settings: &mut Settings) {
         let Some((text, error)) = &mut self.naming else {
             return;
         };
@@ -398,9 +656,18 @@ impl Shell {
             } else {
                 self.asks.push(Ask::Save(name));
                 self.naming = None;
+                // Saving was the answer to the warning, so the switch it held up goes
+                // ahead now the settings are somewhere they can be got back from.
+                if let Some(action) = self.after_saving.take() {
+                    self.saved = Some(settings.clone());
+                    self.run(&action, settings);
+                }
             }
         } else if cancel || !open {
             self.naming = None;
+            // Backing out of the name dialog backs out of the switch as well: the
+            // person asked to save first, and there has been no save.
+            self.after_saving = None;
         }
     }
 }
@@ -494,17 +761,212 @@ fn draw(ui: &mut egui::Ui, items: &[Item], chosen: &mut Option<Action>) {
                     took(ui, action);
                 }
             }
+            // A choice reads as a submenu of radios, which is what it has always
+            // looked like; the model groups it so that help can draw it as one row.
+            Kind::Choice(picks) => {
+                ui.menu_button(with_value(item, value_of(picks)), |ui| {
+                    radios(ui, picks, chosen)
+                })
+                .response
+                .on_hover_text(item.help);
+            }
+            // A number is the same submenu of named values, and under them the slider
+            // and the steppers that reach everything between them.
+            Kind::Number(n, value, picks) => {
+                ui.menu_button(with_value(item, Some(menu::written(*n, *value))), |ui| {
+                    if !picks.is_empty() {
+                        radios(ui, picks, chosen);
+                        ui.separator();
+                    }
+                    slider(ui, *n, *value, chosen);
+                })
+                .response
+                .on_hover_text(item.help);
+            }
         }
     }
 }
 
+/// The values of a group, as radio buttons.
+fn radios(ui: &mut egui::Ui, picks: &[Pick], chosen: &mut Option<Action>) {
+    for p in picks {
+        let hit = ui
+            .add_enabled(
+                p.enabled,
+                egui::RadioButton::new(p.chosen, p.label.as_str()),
+            )
+            .on_hover_text(p.help);
+        if hit.clicked() {
+            *chosen = Some(p.action.clone());
+            took(ui, &p.action);
+        }
+    }
+}
+
+/// A number's slider, with a stepper either side of it.
+///
+/// The steppers are there because a slider is bad at the last two pixels: nudging a
+/// visual delay by five milliseconds or a bar by one is exactly the kind of thing this
+/// menu is for, and dragging to it is luck.
+fn slider(ui: &mut egui::Ui, n: Number, value: f64, chosen: &mut Option<Action>) {
+    let r = n.range();
+    let mut v = value;
+    ui.horizontal(|ui| {
+        if ui
+            .add_enabled(value > r.min, egui::Button::new("−"))
+            .on_hover_text(format!("Down by {}", menu::written(n, r.step)))
+            .clicked()
+        {
+            *chosen = Some(Action::Step(n, -1.0));
+        }
+        // The value shows, and shows as a box that can be typed into: a slider is the
+        // wrong tool for "exactly 150 ms", and inside the submenu the label that
+        // carries the figure is out of sight.
+        //
+        // No `step_by`. egui snaps the value it is given onto the step grid and reports
+        // that as a change, so a slider that steps would move any figure not already on
+        // its grid the moment it was drawn: opening this menu once turned a top of the
+        // axis of 22,050 Hz into 22,100. The step belongs to the buttons either side,
+        // which are the ones asked to move by a step; the bar itself goes anywhere the
+        // setting allows, and `Settings::set_number` rounds the whole ones.
+        let drag = ui.add(
+            egui::Slider::new(&mut v, r.min..=r.max).custom_formatter(|x, _| menu::written(n, x)),
+        );
+        if drag.changed() {
+            *chosen = Some(Action::Set(n, v));
+        }
+        if ui
+            .add_enabled(value < r.max, egui::Button::new("+"))
+            .on_hover_text(format!("Up by {}", menu::written(n, r.step)))
+            .clicked()
+        {
+            *chosen = Some(Action::Step(n, 1.0));
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(menu::written(n, r.min)).weak().small());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(egui::RichText::new(menu::written(n, r.max)).weak().small());
+        });
+    });
+    // A slider drag is one long gesture; without this the picture behind only catches
+    // up when the pointer stops.
+    ui.ctx().request_repaint();
+}
+
+/// Which value of a group is in use.
+fn value_of(picks: &[Pick]) -> Option<String> {
+    picks.iter().find(|p| p.chosen).map(|p| p.label.clone())
+}
+
+/// An item's label with what it is set to written after it, so a submenu says what is
+/// inside it without being opened.
+fn with_value(item: &Item, value: Option<String>) -> egui::Atoms<'_> {
+    let mut atoms = egui::Atoms::new(item.label.as_str());
+    if let Some(value) = value {
+        atoms.push_right(egui::Atom::grow());
+        atoms.push_right(egui::RichText::new(value).weak());
+    }
+    atoms
+}
+
 /// A help row's label: everything below the heading it is grouped under, so a command
 /// two levels down still says which level it is on.
-fn under(entry: &menu::Entry) -> &str {
+fn under(entry: &Entry) -> &str {
     match entry.path.split_once(" > ") {
         Some((_, rest)) => rest,
         None => entry.path.as_str(),
     }
+}
+
+/// One row of the help list: the state, the name, the control, the key and the help.
+///
+/// Returns the row's own button where it has one, so the keyboard can scroll to it. A
+/// number has none: it is a slider the whole way across, and there is nothing sensible
+/// for Enter to do to it.
+fn row(
+    ui: &mut egui::Ui,
+    entry: &Entry,
+    query: &str,
+    picked: bool,
+    chosen: &mut Option<Action>,
+) -> Option<egui::Response> {
+    if mark(ui, entry).is_some_and(|r| r.clicked()) {
+        *chosen = Some(entry.action.clone());
+    }
+    // Five cells every time, whatever the row is, or the columns stop lining up and
+    // the grid reads as a heap: the state, the name, the control, the key, the words.
+    let name = highlight(ui, under(entry), query);
+    let hit = match &entry.kind {
+        // A number is set here rather than reached from here: the row is the slider.
+        EntryKind::Number(n, value, _) => {
+            ui.label(name);
+            let r = n.range();
+            let mut v = *value;
+            // No `step_by` here either, and for the same reason: see `slider`.
+            let drag = ui.add_enabled(
+                entry.enabled,
+                egui::Slider::new(&mut v, r.min..=r.max)
+                    .custom_formatter(|x, _| menu::written(*n, x)),
+            );
+            if drag.changed() {
+                *chosen = Some(Action::Set(*n, v));
+            }
+            None
+        }
+        // A choice is picked here too, from the values the row carries.
+        EntryKind::Choice(picks) => {
+            ui.label(name);
+            let current = picks
+                .iter()
+                .find(|p| p.chosen)
+                .map_or("—", |p| p.label.as_str());
+            ui.add_enabled_ui(entry.enabled, |ui| {
+                egui::ComboBox::from_id_salt(&entry.path)
+                    .selected_text(current)
+                    .show_ui(ui, |ui| {
+                        for p in picks {
+                            let hit = ui.add_enabled(
+                                p.enabled,
+                                egui::Button::selectable(p.chosen, p.label.as_str()),
+                            );
+                            if hit.on_hover_text(p.help).clicked() {
+                                *chosen = Some(p.action.clone());
+                            }
+                        }
+                    });
+            });
+            None
+        }
+        _ => {
+            let hit = ui.add_enabled(entry.enabled, egui::Button::new(name).selected(picked));
+            if hit.clicked() {
+                *chosen = Some(entry.action.clone());
+            }
+            // Nothing in the control column: a command is done by its own row, and a
+            // switch by the box at the head of it.
+            ui.label("");
+            Some(hit)
+        }
+    };
+    ui.label(chip(entry.shortcut));
+    ui.horizontal(|ui| {
+        // The revert sits with the help rather than in a column of its own, because
+        // most rows have none and an empty column down the whole list reads as damage.
+        if let Some(back) = &entry.reset {
+            if ui
+                .small_button("↺")
+                .on_hover_text("Put this back to what the app ships with")
+                .clicked()
+            {
+                *chosen = Some(back.clone());
+            }
+        } else {
+            ui.label(egui::RichText::new("  ").small());
+        }
+        ui.label(highlight(ui, entry.help, query));
+    });
+    hit
 }
 
 /// The state of a switch or a choice, down the left of the help list: the same box or
@@ -515,23 +977,163 @@ fn under(entry: &menu::Entry) -> &str {
 /// list of settings whose "on" mark is a missing-glyph box is worse than no mark.
 /// Clicking one does what clicking the row does, so there is nothing here that looks
 /// like a second, disagreeing switch.
-fn mark(ui: &mut egui::Ui, entry: &menu::Entry) -> Option<egui::Response> {
+fn mark(ui: &mut egui::Ui, entry: &Entry) -> Option<egui::Response> {
     match entry.kind {
-        menu::EntryKind::Command => {
+        EntryKind::Command | EntryKind::Choice(_) | EntryKind::Number(..) => {
             ui.label("");
             None
         }
-        menu::EntryKind::Check(on) => {
+        EntryKind::Check(on) => {
             let mut shown = on;
             Some(ui.add_enabled(entry.enabled, egui::Checkbox::without_text(&mut shown)))
         }
-        menu::EntryKind::Radio(chosen) => {
+        EntryKind::Radio(chosen) => {
             Some(ui.add_enabled(entry.enabled, egui::RadioButton::new(chosen, "")))
         }
     }
 }
 
-/// A key as a chip, or a dash where a command has no key.
+/// The page for everything the menu cannot say, because none of it is a menu item: what
+/// the parts of the picture are, and what the mouse does to them.
+fn how_it_works(ui: &mut egui::Ui) {
+    let para = |ui: &mut egui::Ui, text: &str| {
+        ui.label(text);
+        ui.add_space(6.0);
+    };
+    // A grid rather than a row of two labels: the second column has to wrap, and a
+    // label that wraps inside a horizontal layout takes the whole width for itself.
+    let pair = |ui: &mut egui::Ui, id: &str, rows: &[(&str, &str)]| {
+        egui::Grid::new(id)
+            .num_columns(2)
+            .spacing([16.0, 8.0])
+            .show(ui, |ui| {
+                for (name, text) in rows {
+                    ui.with_layout(
+                        egui::Layout::top_down(egui::Align::LEFT).with_main_wrap(false),
+                        |ui| {
+                            ui.set_min_width(150.0);
+                            ui.label(egui::RichText::new(*name).strong());
+                        },
+                    );
+                    ui.label(*text);
+                    ui.end_row();
+                }
+            });
+    };
+
+    ui.heading("The picture");
+    ui.add_space(4.0);
+    para(
+        ui,
+        "Sonorant listens to whatever the machine is playing and draws it. Nothing here \
+         changes the sound; it is a window onto it.",
+    );
+    pair(
+        ui,
+        "how-picture",
+        &[
+            (
+                "The panes",
+                "One per channel, left and right. Frequency runs up the pane and time runs \
+                 across it, so a held note is a horizontal line and a drum is a vertical \
+                 one. Colour is level.",
+            ),
+            (
+                "The gutter",
+                "The labelled strip between the panes, carrying the frequency axis. With \
+                 room to spare the same labels repeat at both outer edges.",
+            ),
+            (
+                "The spectrum",
+                "The strip beside each image: the level in every band right now, measured \
+                 from the edge nearest the newest column.",
+            ),
+            (
+                "The scale strip",
+                "The reserved band at the end of the panes carrying the time marks and the \
+                 level numbers. It can sit at either end, or at both.",
+            ),
+            (
+                "The deck",
+                "The panel between the panes: artwork, the track, the transport, the \
+                 goniometer, and the loudness figures.",
+            ),
+            (
+                "The lanes",
+                "The waveform along the bottom: level against time, on the same time axis \
+                 as the image above it.",
+            ),
+            (
+                "The quick bar",
+                "The row of buttons over the image, for the switches reached most often. \
+                 Every one of them is a menu item as well.",
+            ),
+            (
+                "The status line",
+                "What is being captured, loudness and tempo, the frame rate, the refreshes \
+                 missed, the GPU's time, and how far the picture is behind the sound.",
+            ),
+        ],
+    );
+
+    ui.add_space(14.0);
+    ui.heading("The mouse");
+    ui.add_space(4.0);
+    pair(
+        ui,
+        "how-mouse",
+        &[
+            (
+                "Point at a pane",
+                "Reads out the frequency under the pointer as hertz and as a note with its \
+                 deviation in cents, each channel's level there, and how far back in time \
+                 the column is.",
+            ),
+            (
+                "Wheel over the image",
+                "Zooms time about the pointer, so the history spreads out or packs in. The \
+                 status line says the zoom while it is not 1x.",
+            ),
+            (
+                "Drag across the image",
+                "Walks back through the history. The image parks where it is left; End, or \
+                 Live in the menu, brings it back to now.",
+            ),
+            (
+                "Drag with the waterfall on",
+                "Orbits the camera instead. The wheel moves the eye in and out.",
+            ),
+            (
+                "Double-click a column",
+                "Sends the player to that moment, where the player can be seeked.",
+            ),
+            (
+                "Right-click anywhere",
+                "The menu: presets, what is captured, and every setting. It stays open \
+                 while you use it, so a switch can be tried against the last.",
+            ),
+        ],
+    );
+
+    ui.add_space(14.0);
+    ui.heading("Settings and presets");
+    ui.add_space(4.0);
+    para(
+        ui,
+        "Settings are written when the app closes, so they are as you left them next \
+         time. A preset is a whole set of them saved under a name: the built-in ones are \
+         in the Presets menu, and Save these settings puts yours beside them. Switching \
+         away from changes you have not saved asks first.",
+    );
+    para(
+        ui,
+        "Default in that menu, and Reset every setting, both put back what the app ships \
+         with. On the Commands page, Changed lists everything that differs from it, and \
+         the arrow on a row puts that one setting back on its own.",
+    );
+}
+
+/// A key as a chip, or a dash where a command has no key./// A key as a chip, or a dash where a command has no key.
 fn chip(shortcut: Option<&str>) -> egui::RichText {
     match shortcut {
         Some(key) => egui::RichText::new(key).monospace().strong(),
@@ -611,5 +1213,124 @@ pub fn key_name(key: &winit::keyboard::Key) -> Option<String> {
         Key::Named(NamedKey::F11) => Some("F11".to_owned()),
         Key::Character(c) if c.len() == 1 && c.is_ascii() => Some(c.to_uppercase()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sonorant_core::settings::{Flag, Preset};
+
+    /// A shell that has just read its settings off disk: nothing unsaved yet.
+    fn shell_for(settings: &Settings) -> Shell {
+        let mut shell = Shell::default();
+        shell.settled(settings);
+        shell
+    }
+
+    #[test]
+    fn a_switch_that_would_lose_changes_asks_first() {
+        let mut s = Settings::default();
+        let mut shell = shell_for(&s);
+        assert!(!shell.unsaved(&s));
+
+        // Nothing to lose, so the preset lands without a word.
+        shell.act(&Action::UsePreset(Preset::QC), &mut s);
+        assert_eq!(s.preset, Preset::QC);
+        assert!(shell.confirming.is_none());
+        // And a preset is itself a place to get back to.
+        assert!(!shell.unsaved(&s));
+
+        // Now there is something to lose.
+        shell.act(&Action::Toggle(Flag::Glow), &mut s);
+        assert!(shell.unsaved(&s));
+        let before = s.clone();
+        shell.act(&Action::UsePreset(Preset::Bass), &mut s);
+        assert_eq!(s, before, "the switch waits for an answer");
+        assert!(shell.confirming.is_some());
+        assert!(shell.close_the_menu, "the dialog would be behind the menu");
+    }
+
+    #[test]
+    fn only_the_three_that_replace_everything_are_guarded() {
+        let mut s = Settings::default();
+        let mut shell = shell_for(&s);
+        shell.act(&Action::Toggle(Flag::Glow), &mut s);
+        assert!(shell.unsaved(&s));
+
+        for action in [
+            Action::UsePreset(Preset::QC),
+            Action::LoadPreset("mine".to_owned()),
+            Action::ResetSettings,
+        ] {
+            assert!(
+                shell.would_lose_changes(&action, &s).is_some(),
+                "{action:?} should ask"
+            );
+        }
+        // Quitting writes the settings on the way out, so nothing is lost by leaving,
+        // and everything else is one setting rather than all of them.
+        for action in [
+            Action::Quit,
+            Action::Toggle(Flag::ShowGrid),
+            Action::SavePreset,
+            Action::Freeze,
+        ] {
+            assert!(
+                shell.would_lose_changes(&action, &s).is_none(),
+                "{action:?} should not ask"
+            );
+        }
+    }
+
+    #[test]
+    fn saving_first_carries_the_switch_out_afterwards() {
+        let mut s = Settings::default();
+        let mut shell = shell_for(&s);
+        shell.act(&Action::Toggle(Flag::Glow), &mut s);
+        shell.act(&Action::UsePreset(Preset::Bass), &mut s);
+
+        // What the Save button does: the name dialog opens, holding the switch.
+        let (action, _) = shell.confirming.take().expect("the warning");
+        shell.after_saving = Some(action);
+        shell.naming = Some((String::new(), None));
+
+        // What answering the name dialog does.
+        shell.asks.push(Ask::Save("mine".to_owned()));
+        shell.naming = None;
+        let held = shell.after_saving.take().expect("the held switch");
+        shell.saved = Some(s.clone());
+        shell.run(&held, &mut s);
+
+        assert_eq!(s.preset, Preset::Bass, "the switch went ahead");
+        assert!(!shell.unsaved(&s));
+    }
+
+    #[test]
+    fn a_reset_leaves_nothing_unsaved() {
+        let mut s = Settings::default();
+        let mut shell = shell_for(&s);
+        shell.act(&Action::Toggle(Flag::Glow), &mut s);
+        assert!(shell.unsaved(&s));
+        // The warning, then the answer.
+        shell.act(&Action::ResetSettings, &mut s);
+        shell.confirming = None;
+        shell.run(&Action::ResetSettings, &mut s);
+        assert_eq!(s, Settings::default());
+        assert!(!shell.unsaved(&s));
+    }
+
+    /// The popup memory is egui's, so this is what closing the menu really comes down
+    /// to. The window event that calls it is winit's and can't be raised from a test;
+    /// what can go wrong here is reaching for the wrong door, not the door sticking.
+    #[test]
+    fn closing_the_menu_clears_the_popup_egui_is_holding() {
+        let ctx = egui::Context::default();
+        let shell = Shell::default();
+        let id = egui::Id::new("a menu");
+        egui::Popup::open_id(&ctx, id);
+        assert!(egui::Popup::is_id_open(&ctx, id));
+        shell.close_menu(&ctx);
+        assert!(!egui::Popup::is_any_open(&ctx));
     }
 }

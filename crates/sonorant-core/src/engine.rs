@@ -560,7 +560,11 @@ mod tests {
     #[test]
     fn rows_follow_audio_time() {
         // 60 rows per second at 120 hops: a row every other analysed hop.
-        let config = AnalysisConfig::from_settings(&Settings::default(), 200);
+        let s = Settings {
+            rows_per_second: 60.0,
+            ..Settings::default()
+        };
+        let config = AnalysisConfig::from_settings(&s, 200);
         let x = tone(48000 * 3, 48000.0);
         let mut out = Collect::default();
         Engine::new(48000.0, 120.0, config).push(&x, &x, &mut out);
@@ -572,7 +576,7 @@ mod tests {
         );
         // At 44.1 kHz hops are 367.5 frames long, so they alternate 367 and 368.
         let mut out = Collect::default();
-        let config = AnalysisConfig::from_settings(&Settings::default(), 200);
+        let config = AnalysisConfig::from_settings(&s, 200);
         Engine::new(44100.0, 120.0, config).push(
             &tone(44100, 44100.0),
             &tone(44100, 44100.0),

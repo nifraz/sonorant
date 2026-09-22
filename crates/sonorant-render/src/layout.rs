@@ -58,8 +58,12 @@ pub struct PaneLayout {
     pub bounds: Rect,
     pub curve: Rect,
     pub spectro: Rect,
-    /// The reserved scale strip, or empty.
+    /// The reserved scale strip, or empty. With a strip at both ends this is the top
+    /// one, so everything that asks "is there a strip over the image?" still reads
+    /// this field and gets the same answer.
     pub lane: Rect,
+    /// The second strip when the scales are repeated at both ends, or empty.
+    pub lane_bottom: Rect,
     pub curve_on_left: bool,
 }
 
@@ -70,35 +74,43 @@ impl PaneLayout {
         curve_width: i32,
         curve_on_left: bool,
         lane_height: i32,
-        lane_at_top: bool,
+        lane_pos: ScaleLanePosition,
     ) -> PaneLayout {
         let mut b = bounds;
         b.w = b.w.max(8);
         b.h = b.h.max(8);
         let curve_width = curve_width.max(0).min((b.w - 16).max(0));
-        // Never let the strip eat the image: on a short panel the scales are worth less
-        // than the pixels they would cost.
-        let lane_height = if lane_height < 0 || lane_height > b.h / 4 {
-            0
-        } else {
-            lane_height
+        // Never let the strips eat the image: on a short panel the scales are worth
+        // less than the pixels they would cost. Asking for both ends and getting one
+        // is better than asking for both and getting none, so the second is dropped
+        // first and only then the first.
+        let mut wanted = match lane_pos {
+            _ if lane_height <= 0 => 0,
+            ScaleLanePosition::Both => 2,
+            _ => 1,
         };
-
-        let (lane, body) = if lane_height > 0 {
-            if lane_at_top {
-                (
-                    Rect::new(b.x, b.y, b.w, lane_height),
-                    Rect::new(b.x, b.y + lane_height, b.w, b.h - lane_height),
-                )
+        while wanted > 0 && wanted * lane_height > b.h / 4 {
+            wanted -= 1;
+        }
+        let top = Rect::new(b.x, b.y, b.w, lane_height);
+        let bottom = Rect::new(b.x, b.bottom() - lane_height, b.w, lane_height);
+        let (lane, lane_bottom) = match (wanted, lane_pos) {
+            (0, _) => (Rect::EMPTY, Rect::EMPTY),
+            (1, ScaleLanePosition::Bottom) => (bottom, Rect::EMPTY),
+            (1, _) => (top, Rect::EMPTY),
+            (_, _) => (top, bottom),
+        };
+        let used = wanted * lane_height;
+        let body = Rect::new(
+            b.x,
+            if lane.is_empty() || lane.y > b.y {
+                b.y
             } else {
-                (
-                    Rect::new(b.x, b.bottom() - lane_height, b.w, lane_height),
-                    Rect::new(b.x, b.y, b.w, b.h - lane_height),
-                )
-            }
-        } else {
-            (Rect::EMPTY, b)
-        };
+                b.y + lane_height
+            },
+            b.w,
+            b.h - used,
+        );
         let spec_w = (body.w - curve_width).max(1);
         let (curve, spectro) = if curve_on_left {
             (
@@ -117,8 +129,16 @@ impl PaneLayout {
             curve,
             spectro,
             lane,
+            lane_bottom,
             curve_on_left,
         }
+    }
+
+    /// The reserved strips, top first, skipping the ends that have none.
+    pub fn lanes(&self) -> impl Iterator<Item = Rect> {
+        [self.lane, self.lane_bottom]
+            .into_iter()
+            .filter(|r| !r.is_empty())
     }
 
     /// Rows back from the newest at pixel column `x`, or `None` off the spectrogram. The
@@ -183,7 +203,6 @@ impl ScopeLayout {
             0
         };
         let lane_h = px(s.scale_lane_height());
-        let lane_top = s.scale_lane_pos == ScaleLanePosition::Top;
         let labels = s.pair_mode.pane_labels();
         let pane_w = ((inner.w - gutter) / pane_count.max(1)).max(px(8));
         let curve_width = pane_w * s.curve_width_pct.clamp(0, 60) / 100;
@@ -203,7 +222,7 @@ impl ScopeLayout {
                 curve_width,
                 left_on_left,
                 lane_h,
-                lane_top,
+                s.scale_lane_pos,
             );
             let gx = inner.x + pane_w;
             let right_x = gx + gutter;
@@ -213,7 +232,7 @@ impl ScopeLayout {
                 curve_width,
                 s.curve_on_left,
                 lane_h,
-                lane_top,
+                s.scale_lane_pos,
             );
             (vec![left, right], Rect::new(gx, inner.y, gutter, inner.h))
         } else {
@@ -224,7 +243,7 @@ impl ScopeLayout {
                     curve_width,
                     s.curve_on_left,
                     lane_h,
-                    lane_top,
+                    s.scale_lane_pos,
                 )],
                 Rect::EMPTY,
             )
@@ -268,8 +287,67 @@ mod tests {
     }
 
     #[test]
+    fn a_strip_at_both_ends_repeats_it_rather_than_splitting_it() {
+        let at = |pos| {
+            let s = Settings {
+                scale_lane_pos: pos,
+                ..Settings::default()
+            };
+            ScopeLayout::new(Rect::new(0, 0, 1200, 600), &s, 1.0)
+        };
+        let top = at(ScaleLanePosition::Top);
+        let both = at(ScaleLanePosition::Both);
+        let (a, b) = (&top.panes[0], &both.panes[0]);
+        let h = a.lane.h;
+        assert!(h > 0, "the default settings reserve a strip");
+
+        // The top strip is the same strip, at the same size: `Both` adds one rather
+        // than halving what was there.
+        assert_eq!(b.lane, a.lane);
+        assert_eq!(
+            b.lane_bottom,
+            Rect::new(b.bounds.x, b.bounds.bottom() - h, b.bounds.w, h)
+        );
+        assert_eq!(b.lanes().count(), 2);
+        // The image starts where it did and pays for the second strip once.
+        assert_eq!(b.spectro.y, a.spectro.y);
+        assert_eq!(b.spectro.h, a.spectro.h - h);
+        assert_eq!(b.spectro.bottom(), b.lane_bottom.y);
+
+        // At one end, whichever end, there is one strip and `lane` is it.
+        let bottom = at(ScaleLanePosition::Bottom);
+        let c = &bottom.panes[0];
+        assert_eq!(c.lane, b.lane_bottom);
+        assert_eq!(c.lane_bottom, Rect::EMPTY);
+        assert_eq!(c.lanes().count(), 1);
+        assert_eq!(c.spectro.y, c.bounds.y);
+    }
+
+    #[test]
+    fn a_short_pane_gives_up_the_second_strip_before_the_first() {
+        let s = Settings {
+            scale_lane_pos: ScaleLanePosition::Both,
+            ..Settings::default()
+        };
+        let h = s.scale_lane_height();
+        let count = |view_h| {
+            ScopeLayout::new(Rect::new(0, 0, 1200, view_h), &s, 1.0).panes[0]
+                .lanes()
+                .count()
+        };
+        // The strips may have a quarter of the pane between them, no more.
+        assert_eq!(count(h * 8), 2);
+        assert_eq!(count(h * 6), 1);
+        assert_eq!(count(h * 3), 0);
+    }
+
+    #[test]
     fn age_runs_away_from_the_curve() {
-        let s = Settings::default();
+        // Unmirrored, which is the plain rule; the mirrored pair has a test of its own.
+        let s = Settings {
+            mirror_left_pane: false,
+            ..Settings::default()
+        };
         let l = ScopeLayout::new(Rect::new(0, 0, 1200, 600), &s, 1.0);
         let p = &l.panes[0];
         assert_eq!(p.age_at(p.spectro.x, 1.0), Some(0.0));

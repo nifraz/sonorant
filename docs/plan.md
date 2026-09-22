@@ -56,10 +56,14 @@ possible, and follows whatever player is running instead of living inside one.
 | Store title | "Sonorant – Music Visualizer" | Decided |
 | CPU target | Three numbers, not one: analysis under 5% of a core, drawing under 1 ms of CPU a frame, under 10% together. The single "5% at 144 Hz" contradicted the analysis target | Decided, Phase 8 |
 | Time-axis mip chain | One max-pooled level, not the full chain, and after the first release: 18 MB against 155 for detail only a zoomed-out view shows | Decided, Phase 8 |
+| Shipped defaults | Sonorant's own, not Nostalgia+'s. `Settings::nostalgia_plus` keeps what that program shipped, so the importer and every exported vector still measure against it, and `Settings::default` is free to be what this app opens as | Decided, after 0.2.0 |
+| Setting a number | Named sizes **and** a slider with steppers, not one or the other: the sizes are the figures worth returning to, the slider reaches everything between them, and its box takes an exact one typed in | Decided, after 0.2.0 |
+| Losing unsaved settings | A dialog before a preset, a saved preset or a reset, offering to save first. Not before quitting, which writes the settings anyway | Decided, after 0.2.0 |
+| Help's shape | A settings sheet, not an index: one row per setting with its own control on it, and a choice as one row rather than one per value | Decided, after 0.2.0 |
 
 ## Progress
 
-*As of 2026-09-21.* Phases 0 to 5 are written, apart from the checks that need other
+*As of 2026-09-22.* Phases 0 to 5 are written, apart from the checks that need other
 machines, a real player or CI. Every piece Phase 3 deferred has now arrived: the
 backdrop in Phase 4, and the harmonic ruler and the quick bar in Phase 5. The three
 targets missed at the start are met or explained (see [Measurements](#measurements)).
@@ -79,7 +83,13 @@ packages, a Windows zip, winget manifests and a release workflow that a tag sets
 and arm64 and a Windows zip, published from the tag. No Flatpak has been built
 anywhere. Phase 8 also had two calls to make and made both: the CPU target moved,
 because as written it contradicted the analysis target, and the time-axis mip chain is
-not being built as the plan described it. What is left is at [Next](#next).
+not being built as the plan described it. **Since 0.2.0** the app has been made its own
+rather than Nostalgia+'s: it ships with its own defaults, five more presets and six more
+palettes, every number can be set to anything its range allows rather than to one of five
+sizes, the menu is seven groups instead of eleven, help is a settings sheet in two pages,
+switching away from unsaved settings asks first, the scale strip can be repeated at both
+ends of the panes, and leaving the window puts the menu away. What is left is at
+[Next](#next).
 
 **Phase 0 (repository, CI, skeleton): done, except clean frame pacing and CI**
 
@@ -304,7 +314,7 @@ top corners.
   all, so ticking a box put the whole thing away and the next switch needed another
   right-click; the fix is one line at the popup, which a submenu inherits. What closes
   it now is what takes over from it: help, a preset dialog, quitting, a click outside,
-  `Esc`, and a `Close menu` item of its own at the foot. `Action::closes_menu` says
+  going to another window, `Esc`, and a `Close menu` item of its own at the foot. `Action::closes_menu` says
   which, in the model, with a test naming every item that does. `Quit` was reworded
   `Quit Sonorant`, because "Close" now means the menu. **`Esc` takes one thing off at a
   time:** the menu, then help, then fullscreen. egui closes a popup on `Esc` without
@@ -658,6 +668,59 @@ being asked to do something it does badly.
   arithmetic, so it is the first thing after the release rather than part of it.
 
 ### Next
+
+**The defaults are the app's own now, and the parity work still stands.**
+`Settings::default` is what Sonorant opens as and what `Reset every setting` puts back:
+a linear axis over the whole band, the red ramp, bars against a mirrored pair of panes,
+and the chrome that reads as measurement rather than as picture switched off. What used
+to be there is `Settings::nostalgia_plus`, and it has not moved: the importer fills in
+from it whatever a Nostalgia+ file has no field for, `apply_preset` lays that program's
+eight presets over it, and `settings.json`, `layout.json` and both golden renders are
+still measured against it, unchanged and uncopied. A ninth preset, `Default`, is the
+one that isn't Nostalgia+'s; it assigns every field rather than a handful, because it
+is the shipped settings rather than a slant on them, so choosing it and resetting are
+the same act. Tests that leaned on a default they were not about now name what they
+need: the quick bar's tests turn the bar on, the deck's row counts ask for the baseline
+because they are its text size, and the engine's scroll test says 60 rows a second.
+
+**The scale strip can be repeated at both ends.** `ScaleLanePosition` gained `Both`, and
+a pane carries two rectangles rather than one. It repeats the whole strip instead of
+splitting it, so either edge of a tall window carries the time marks, the level numbers,
+the unit captions and the axis's own name; the ticks and the text read from the end each
+strip sits at, which is what the `Lane` pair in `axes` is for. It costs the strip's
+height twice, and where a quarter of the pane will not hold two the second is dropped
+before the first, because one strip is better than none.
+
+**Every number is a range now, not five sizes.** `Kind::Number` carries the value and the
+sizes worth returning to; the menu draws the sizes as radios and a slider with a stepper
+either side under them, and the slider's box takes a figure typed in. A size is marked
+only when it really is the value, where it used to mark whichever was nearest: with a
+slider on the same screen, a tick on 3.0 while the bar reads 3.4 is two things
+disagreeing. **The slider carries no `step_by`:** egui snaps the value it is handed onto
+the step grid and reports that as a change, so a stepping slider moved every figure not
+already on its grid the moment it was drawn, and opening the menu once turned a 22,050 Hz
+top of the axis into 22,100. The step belongs to the buttons, which are the ones asked to
+move by one. The ranges opened up with it, and four settings that had no menu item at all
+got one: the peak trace's decay, the average trace's window, the channel names, and the
+hover readout's box, which is what `ShowHud` had always been for and had never been wired
+to anything.
+
+**Help is a settings sheet in two pages.** A choice is one row carrying its values rather
+than a row per value, which took the list from 257 rows to 128 and stopped four of them
+reading "Which pair of channels the panes show"; the values ride along on the row, so
+searching still finds a palette by name. Each row holds its own control, so a setting is
+changed in help rather than looked up there, and each knows what would put it back, which
+is both the "changed" filter and the arrow on the row. The second page is everything the
+menu cannot say because none of it is a menu item: what the panes, the gutter, the strip
+and the deck are, and what the wheel, a drag and a double-click do.
+
+**Switching away from unsaved settings asks first.** The guard sits in `Shell::act`, which
+every path goes through, rather than in the model, and what it measures against is a
+snapshot taken whenever the settings last came from somewhere they can be got back from.
+`Settings::preset` cannot answer this: loading a preset of your own replaces the whole
+struct and brings whatever `preset` was written into that file with it. The count in the
+dialog is one reading of the menu model against another, because the question is how much
+would be lost, not how far the settings are from the defaults.
 
 **Get CI green.** The release is out and the build that makes it works; what is still
 red is the checking. `cargo-deny` is the one nobody has run, and the Windows test step
@@ -1184,13 +1247,16 @@ target and the mip chain, are recorded in [Decisions](#decisions).*
 ### Drawing (Phase 3)
 
 - [x] Scrolling spectrogram, scroll speeds and cinematic mode
-- [x] Palettes: Magma, Inferno, Viridis, Turbo, Ice, Grey, Nostalgia Red
+- [x] Palettes: Magma, Inferno, Viridis, Turbo, Ice, Grey, Nostalgia Red, and six added
+      here: Plasma, Cividis (readable with any colour-vision deficiency), Twilight,
+      Ocean, Phosphor Green and Ember
 - [x] Curve styles: line, bars and LED. Interpolation: flat peaks, linear-smooth and cubic
       spline. Filtering from none to strong
 - [x] Peak, average and minimum traces; solid fill
 - [x] Graph backgrounds: plain, lines, grid, chessboard
 - [x] dB scale, time marks, semitone lines, axis labels; harmonics with the hover
-      readout in Phase 5
+      readout in Phase 5. The reserved scale strip sits at either end of the panes, or
+      at both, where it is repeated rather than split
 - [x] Goniometer, correlation and balance bars
 - [x] Waveform lanes
 - [x] Glow (now bloom), hue drift, beat flare; the backdrop with artwork in Phase 4
@@ -1217,9 +1283,13 @@ target and the mip chain, are recorded in [Decisions](#decisions).*
       hover and hover pin
 - [x] Freeze, amber reference curve
 - [x] Right-click menu, including the centre deck switches, graph size, deck height and
-      curve width
-- [x] Help window with search, name dialog
-- [x] Presets: Studio, Nostalgia, QC, Immersive, and user presets
+      curve width. Seven groups rather than eleven, each row saying what it is set to,
+      and every number a slider and a typed figure as well as its named sizes
+- [x] Help window with search, name dialog, and the unsaved-settings warning. Two pages:
+      the settings sheet, filtered by changed, on or keyed, and "How it works"
+- [x] Presets: Default, Studio, Nostalgia, QC, Immersive, Vocal, Bass, Percussion,
+      Mastering, and Sonorant's own Speech, Classical, Club and Broadcast, plus user
+      presets. Switching away from unsaved settings asks first
 
 ### Replaced
 

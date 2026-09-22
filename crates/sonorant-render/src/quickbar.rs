@@ -283,8 +283,14 @@ mod tests {
         text.chars().count() as f32 * 7.0
     }
 
+    /// The bar showing, at the full size. Its own tests are about the bar, so they
+    /// say so rather than resting on whether the app happens to ship with it on.
     fn settings() -> Settings {
-        Settings::default()
+        Settings {
+            show_quick_buttons: true,
+            quick_bar_compact: false,
+            ..Settings::default()
+        }
     }
 
     #[test]

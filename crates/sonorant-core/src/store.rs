@@ -313,11 +313,18 @@ mod tests {
 
     #[test]
     fn a_bad_value_loses_only_itself() {
-        let mut text = Settings::default().to_toml();
-        text = text.replace("contrast = 0.25", "contrast = \"lots\"");
-        text = text.replace("palette = \"Magma\"", "palette = \"Viridis\"");
+        let d = Settings::default();
+        let mut text = d.to_toml();
+        text = text.replace(
+            &format!("contrast = {:?}", d.contrast),
+            "contrast = \"lots\"",
+        );
+        text = text.replace(
+            &format!("palette = {:?}", d.palette.name()),
+            "palette = \"Viridis\"",
+        );
         let s = Settings::from_toml(&text);
-        assert_eq!(s.contrast, Settings::default().contrast);
+        assert_eq!(s.contrast, d.contrast, "a bad number falls back");
         assert_eq!(s.palette, crate::palette::PaletteKind::Viridis);
         assert_eq!(
             Settings::from_toml("not toml at all ["),

@@ -414,6 +414,9 @@ impl App {
         });
         let mut shell = Shell::new(self.options.fullscreen);
         shell.session.presentation = presentation_of(gpu.config.present_mode);
+        // The settings as they came off disk are a place that can be got back to, so
+        // nothing is "unsaved" until something is changed this run.
+        shell.settled(&settings);
         let presets = store.as_ref().map(Store::list_presets).unwrap_or_default();
         let refresh_hz = crate::present::compositor_refresh_hz().or_else(|| refresh_rate(&window));
         log::info!(
@@ -674,6 +677,17 @@ impl ApplicationHandler<UserEvent> for App {
                 r.gpu.resize(size.width, size.height);
                 r.visuals
                     .resize(&r.gpu.device, r.gpu.config.width, r.gpu.config.height);
+                r.window.request_redraw();
+            }
+            WindowEvent::Focused(false) => {
+                // A menu is something you are in the middle of, and going to another
+                // window ends it. The menu already closes on a click outside itself,
+                // but a click that lands in another application never reaches egui, so
+                // without this the menu would still be up on the way back, over a
+                // picture it no longer has anything to say about. Only the popup goes:
+                // help and the name dialog are windows of their own, and a window you
+                // opened is not something you are in the middle of.
+                r.shell.close_menu(&r.egui_ctx);
                 r.window.request_redraw();
             }
             WindowEvent::Occluded(occluded) => {
@@ -1101,7 +1115,7 @@ impl Running {
                 .first()
                 .filter(|p| p.lane.h > 0 && p.lane.y <= p.bounds.y)
                 .map_or(0.0, |p| p.lane.h as f32);
-        let inset = if self.settings.show_status { 14.0 } else { 0.0 };
+        let inset = if self.status_showing() { 14.0 } else { 0.0 };
         let scales = axes::Scales {
             layout: &self.layout,
             settings: &drawn,
@@ -1112,7 +1126,7 @@ impl Running {
             scale: ppp,
             alpha,
             top_inset: inset,
-            label_floor_y: if self.settings.show_status {
+            label_floor_y: if self.status_showing() {
                 chrome_top + inset + 16.0
             } else {
                 0.0
@@ -1204,7 +1218,7 @@ impl Running {
         // the status line would show, and switching the line off is about the picture
         // rather than about what the app is willing to say it is doing.
         self.reading = self.status_line();
-        if self.settings.show_status {
+        if self.status_showing() {
             deck::draw_status(
                 &mut self.overlay,
                 &drawn,
@@ -2020,10 +2034,14 @@ impl Running {
             return;
         };
         match ask {
+            // A preset loaded or written is a place the settings can be got back to,
+            // so the shell is told: that is what the warning before a switch measures
+            // "unsaved" against.
             Ask::Load(name) => match store.load_preset(name) {
                 Some(settings) => {
                     log::info!("loaded the preset {name}");
                     self.settings = settings;
+                    self.shell.settled(&self.settings);
                 }
                 None => log::error!("cannot read the preset {name}"),
             },
@@ -2034,6 +2052,7 @@ impl Running {
                         if replaced { "replaced" } else { "saved" }
                     );
                     self.presets = store.list_presets();
+                    self.shell.settled(&self.settings);
                 }
                 Err(e) => log::error!("cannot save the preset {name}: {e}"),
             },
@@ -2256,6 +2275,16 @@ impl Running {
     /// has zoomed. Everything that turns pixels into time reads this, not the setting:
     /// the panes, the time marks and the hover readout, which is what keeps them
     /// agreeing about where a column is.
+    /// Whether the status line is drawn.
+    ///
+    /// Its own switch, under the master one. `O` says it covers the hover readout, the
+    /// quick bar and the status line, and the quick bar already answered to both; the
+    /// status line answered only to itself, so a line the menu called on-screen output
+    /// was the one piece the on-screen-output switch left on screen.
+    fn status_showing(&self) -> bool {
+        self.settings.show_status && self.settings.show_osd
+    }
+
     fn px_per_row_now(&self) -> f64 {
         f64::from(self.px_per_row()) * self.view.zoom
     }

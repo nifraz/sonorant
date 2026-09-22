@@ -34,8 +34,13 @@ pub struct LegacySettings {
 }
 
 impl Default for LegacySettings {
+    /// Nostalgia+'s own defaults, not Sonorant's.
+    ///
+    /// This is what a field the file doesn't carry falls back to, so importing a
+    /// Nostalgia+ config gives back what that program was showing rather than a mix of
+    /// its settings and this app's.
     fn default() -> Self {
-        let settings = Settings::default();
+        let settings = Settings::nostalgia_plus();
         LegacySettings {
             settings,
             target_fps: 60,
@@ -391,7 +396,7 @@ mod tests {
     fn bad_values_keep_defaults() {
         let l =
             LegacySettings::parse("FMax=not-a-number\nPalette=Rainbow\nColCurve=zz\nShowGrid=yes");
-        let d = Settings::default();
+        let d = Settings::nostalgia_plus();
         assert_eq!(l.settings.fmax, d.fmax);
         assert_eq!(l.settings.palette, d.palette);
         assert_eq!(l.settings.theme.curve, None);

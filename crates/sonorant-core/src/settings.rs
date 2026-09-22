@@ -40,6 +40,14 @@ macro_rules! named_enum {
 
 named_enum! {
     /// The built-in starting points. `Custom` means "changed since a preset".
+    ///
+    /// `Default` is the settings the app ships with, so choosing it and `Reset every
+    /// setting` land in the same place. `Speech`, `Classical`, `Club` and `Broadcast`
+    /// are Sonorant's own too. The other eight are Nostalgia+'s, and each still matches
+    /// the preset file that program exported.
+    ///
+    /// **New presets go on the end.** The importer reads Nostalgia+'s `Preset` field as
+    /// a number as well as a name, so inserting one would change what an old file says.
     Preset {
         Nostalgia = "Nostalgia",
         Studio = "Studio",
@@ -50,7 +58,12 @@ named_enum! {
         Bass = "Bass",
         Percussion = "Percussion",
         Mastering = "Mastering",
-    } default Studio
+        Default = "Default",
+        Speech = "Speech",
+        Classical = "Classical",
+        Club = "Club",
+        Broadcast = "Broadcast",
+    } default Default
 }
 
 named_enum! {
@@ -96,8 +109,12 @@ named_enum! {
 }
 
 named_enum! {
-    /// Which end of the panes the scale strip sits at.
-    ScaleLanePosition { Top = "Top", Bottom = "Bottom" } default Top
+    /// Which end of the panes the scale strip sits at, or both ends.
+    ///
+    /// `Both` repeats the whole strip rather than splitting it, so the time marks and
+    /// the level numbers are within a glance of either edge of a tall window. It costs
+    /// the strip's height twice, taken off the image.
+    ScaleLanePosition { Top = "Top", Bottom = "Bottom", Both = "Both" } default Top
 }
 
 named_enum! {
@@ -417,7 +434,125 @@ pub struct Settings {
 }
 
 impl Default for Settings {
+    /// What the app ships with, and what `Reset every setting` puts back.
+    ///
+    /// Not Nostalgia+'s defaults, which are [`Settings::nostalgia_plus`]: a linear axis
+    /// over the whole band, the red ramp, bars against a mirrored pair of panes, and
+    /// the chrome that reads as furniture rather than as measurement switched off. The
+    /// two are kept apart because the importer and the parity tests still measure
+    /// against what Nostalgia+ shipped, and that has to stay still while this moves.
     fn default() -> Self {
+        Settings {
+            preset: Preset::Default,
+            palette: PaletteKind::NostalgiaRed,
+            scale: FreqScale::Linear,
+            fmin: 0.0,
+            fmax: 22050.0,
+            quality: AnalysisQuality::Fast,
+            window: WindowType::BlackmanHarris,
+            aggregate: BandAggregate::Energy,
+            tilt_db_per_octave: 0.0,
+            adaptive_range: true,
+            floor_db: -140.0,
+            ceiling_db: 0.0,
+            show_grid: true,
+            show_labels: true,
+            show_color_bar: false,
+            show_hud: true,
+            show_status: false,
+            frame_cap: FrameCap::Display,
+            attack_ms: 1.0,
+            release_ms: 80.0,
+            peak_decay_db_per_sec: 14.0,
+            average_seconds: 1.2,
+            rows_per_second: 120.0,
+            px_per_row: 1,
+            smooth_time: false,
+            pair_mode: ChannelPairMode::LeftRight,
+            style: CurveStyle::Bars,
+            interp: CurveInterpolation::LinearSmooth,
+            filter: FilteringAmount::None,
+            show_max: false,
+            show_min: false,
+            show_avg: false,
+            solid_fill: false,
+            curve_on_left: true,
+            mirror_left_pane: true,
+            curve_width_pct: 40,
+            wave_height_pct: 10,
+            background: GraphBackground::Lines,
+            show_db_scale: true,
+            show_time_marks: true,
+            show_semitones: true,
+            show_outer_labels: true,
+            show_axis_labels: true,
+            label_mode: AxisLabelMode::Frequency,
+            label_font_size: 10.0,
+            sync_hover: true,
+            show_hover_pin: true,
+            show_harmonics: true,
+            seek_on_image_click: true,
+            show_osd: true,
+            show_quick_buttons: false,
+            quick_bar_compact: true,
+            reserve_scale_space: true,
+            scale_lane_pos: ScaleLanePosition::Top,
+            show_scale_units: true,
+            show_center_deck: false,
+            deck_height_px: 100,
+            waterfall: false,
+            render_quality: RenderQuality::High,
+            deck_show_goniometer: true,
+            deck_phosphor: true,
+            curve_phosphor: false,
+            phosphor_ms: 500,
+            phosphor_intensity: 100,
+            deck_show_transport: true,
+            deck_show_artwork: true,
+            deck_show_track_info: true,
+            deck_show_correlation: true,
+            deck_show_balance: true,
+            deck_show_lufs_m: true,
+            deck_show_lufs_s: true,
+            deck_show_true_peak: true,
+            deck_show_crest: true,
+            deck_show_lufs_i: true,
+            deck_show_lra: true,
+            deck_show_overs: true,
+            deck_show_bpm: true,
+            deck_show_brightness: true,
+            quick_bar_split: true,
+            bar_size: 2,
+            led_segment: 3,
+            contrast: 0.25,
+            history_minutes: 5,
+            visual_delay_ms: 10,
+            auto_visual_delay: false,
+            gutter_width: 34,
+            show_waveform: false,
+            immersive: true,
+            glow: true,
+            auto_hide: false,
+            imm_backdrop: false,
+            backdrop_pct: 18,
+            imm_beat_reactive: false,
+            imm_colour_follows: false,
+            colour_follow_degrees: 40,
+            imm_cinematic: false,
+            theme: Theme::default(),
+        }
+    }
+}
+
+impl Settings {
+    /// The settings as Nostalgia+ shipped them.
+    ///
+    /// Sonorant's own defaults moved away from these, so this is where the parity work
+    /// still stands: the importer fills in from it whatever a Nostalgia+ file has no
+    /// field for, [`Settings::apply_preset`] lays that program's eight presets over it,
+    /// and the reference tests measure both against the files its harness exported. It
+    /// is the baseline, not a preset, so it is not in the menu.
+    pub fn nostalgia_plus() -> Settings {
         Settings {
             preset: Preset::Studio,
             palette: PaletteKind::Magma,
@@ -661,6 +796,97 @@ impl Settings {
                 self.rows_per_second = HALF_SPEED;
                 self.immersive = false;
             }
+            Preset::Speech => {
+                // Voices and talk. Wider at the bottom than Vocal, so a rumble or a
+                // plosive shows rather than falling off the axis, and quick enough on
+                // its feet for consonants: those are what separate one voice from
+                // another once the formants are on screen.
+                self.palette = PaletteKind::Cividis;
+                self.scale = FreqScale::Note;
+                self.fmin = 80.0;
+                self.fmax = 10000.0;
+                self.quality = AnalysisQuality::Balanced;
+                self.tilt_db_per_octave = 1.5;
+                self.aggregate = BandAggregate::Peak;
+                self.adaptive_range = true;
+                self.contrast = 0.5;
+                self.rows_per_second = HALF_SPEED;
+                self.attack_ms = 5.0;
+                self.release_ms = 140.0;
+                self.immersive = false;
+            }
+            Preset::Classical => {
+                // A long, slow, quiet reading. Nothing adaptive and nothing tilted, a
+                // floor far enough down to hold a real pianissimo, and little contrast,
+                // because in this music the quiet end is the music and not the haze.
+                self.palette = PaletteKind::Viridis;
+                self.scale = FreqScale::Note;
+                self.fmin = 20.0;
+                self.fmax = 20000.0;
+                self.quality = AnalysisQuality::High;
+                self.tilt_db_per_octave = 0.0;
+                self.aggregate = BandAggregate::Energy;
+                self.adaptive_range = false;
+                self.floor_db = -120.0;
+                self.ceiling_db = -6.0;
+                self.contrast = 0.15;
+                self.rows_per_second = 15.0;
+                self.history_minutes = 15;
+                self.immersive = false;
+            }
+            Preset::Club => {
+                // For dancing to rather than reading: the shortest windows, the fastest
+                // scroll, and everything immersive mode has. The tilt is heavy because
+                // the material is, and without it the picture is a bar of light at the
+                // bottom and nothing above it.
+                self.palette = PaletteKind::Ember;
+                self.scale = FreqScale::Note;
+                self.fmin = 20.0;
+                self.fmax = 16000.0;
+                self.quality = AnalysisQuality::LowLatency;
+                self.tilt_db_per_octave = 4.5;
+                self.aggregate = BandAggregate::Peak;
+                self.adaptive_range = true;
+                self.contrast = 0.65;
+                self.rows_per_second = 120.0;
+                self.immersive = true;
+                self.glow = true;
+                self.imm_beat_reactive = true;
+                self.imm_backdrop = true;
+                self.auto_hide = true;
+            }
+            Preset::Broadcast => {
+                // Delivery: a fixed window from -60 to full scale, energy summed, and
+                // the deck showing, because what this is for is the loudness figures
+                // rather than the image. The only preset that turns the deck on, which
+                // is why it sets more than the others do.
+                self.palette = PaletteKind::Grey;
+                self.scale = FreqScale::Linear;
+                self.fmin = 0.0;
+                self.fmax = 22050.0;
+                self.quality = AnalysisQuality::Balanced;
+                self.tilt_db_per_octave = 0.0;
+                self.aggregate = BandAggregate::Energy;
+                self.adaptive_range = false;
+                self.floor_db = -60.0;
+                self.ceiling_db = 0.0;
+                self.rows_per_second = HALF_SPEED;
+                self.show_center_deck = true;
+                self.deck_show_lufs_m = true;
+                self.deck_show_lufs_s = true;
+                self.deck_show_lufs_i = true;
+                self.deck_show_lra = true;
+                self.deck_show_true_peak = true;
+                self.deck_show_overs = true;
+                self.immersive = false;
+            }
+            Preset::Default => {
+                // The one preset that is every field, because it is the settings the
+                // app ships with rather than a handful of choices laid over them.
+                // Choosing it and `Reset every setting` are the same act, which is
+                // what the menu's help line for it says.
+                *self = Settings::default();
+            }
             Preset::Studio | Preset::Custom => {
                 self.palette = PaletteKind::Magma;
                 self.scale = FreqScale::Note;
@@ -784,32 +1010,38 @@ pub struct Range {
 impl Number {
     pub fn range(self) -> Range {
         let (min, max, step, whole, unit) = match self {
-            Number::Fmin => (0.0, 1000.0, 5.0, false, "Hz"),
-            Number::Fmax => (1000.0, 24000.0, 500.0, false, "Hz"),
-            Number::Tilt => (0.0, 6.0, 0.5, false, "dB/oct"),
-            Number::FloorDb => (-140.0, -20.0, 5.0, false, "dB"),
-            Number::CeilingDb => (-60.0, 0.0, 5.0, false, "dB"),
-            Number::Contrast => (0.0, 0.95, 0.05, false, ""),
-            Number::AttackMs => (1.0, 400.0, 5.0, false, "ms"),
-            Number::ReleaseMs => (20.0, 2000.0, 20.0, false, "ms"),
-            Number::PeakDecay => (0.0, 60.0, 2.0, false, "dB/s"),
+            Number::Fmin => (0.0, 1000.0, 1.0, false, "Hz"),
+            Number::Fmax => (1000.0, 24000.0, 100.0, false, "Hz"),
+            // Up to twelve, because a note axis over the whole band is six octaves of
+            // treble to lift and three a decade is not enough to see the top of it.
+            Number::Tilt => (0.0, 12.0, 0.25, false, "dB/oct"),
+            Number::FloorDb => (-140.0, -20.0, 1.0, false, "dB"),
+            Number::CeilingDb => (-60.0, 0.0, 1.0, false, "dB"),
+            Number::Contrast => (0.0, 0.95, 0.01, false, ""),
+            Number::AttackMs => (1.0, 400.0, 1.0, false, "ms"),
+            Number::ReleaseMs => (20.0, 2000.0, 10.0, false, "ms"),
+            Number::PeakDecay => (0.0, 60.0, 1.0, false, "dB/s"),
             Number::AverageSeconds => (0.1, 10.0, 0.1, false, "s"),
-            Number::RowsPerSecond => (1.0, 240.0, 5.0, false, "rows/s"),
-            Number::PxPerRow => (1.0, 8.0, 1.0, true, "px"),
-            Number::CurveWidthPct => (0.0, 60.0, 2.0, true, "%"),
+            Number::RowsPerSecond => (1.0, 240.0, 1.0, false, "rows/s"),
+            Number::PxPerRow => (1.0, 16.0, 1.0, true, "px"),
+            Number::CurveWidthPct => (0.0, 60.0, 1.0, true, "%"),
             Number::WaveHeightPct => (0.0, 40.0, 1.0, true, "%"),
-            Number::DeckHeightPx => (60.0, 400.0, 10.0, true, "px"),
-            Number::GutterWidth => (0.0, 90.0, 2.0, true, "px"),
-            Number::BarSize => (1.0, 24.0, 1.0, true, "px"),
-            Number::LedSegment => (2.0, 20.0, 1.0, true, "px"),
-            Number::LabelFontSize => (5.0, 20.0, 0.5, false, "pt"),
-            Number::BackdropPct => (0.0, 60.0, 2.0, true, "%"),
+            Number::DeckHeightPx => (60.0, 400.0, 5.0, true, "px"),
+            Number::GutterWidth => (0.0, 120.0, 1.0, true, "px"),
+            Number::BarSize => (1.0, 32.0, 1.0, true, "px"),
+            Number::LedSegment => (2.0, 32.0, 1.0, true, "px"),
+            // Up to 28 point, which is a size to read a spectrogram across a room by.
+            Number::LabelFontSize => (5.0, 28.0, 0.5, false, "pt"),
+            Number::BackdropPct => (0.0, 100.0, 1.0, true, "%"),
             Number::ColourFollowDegrees => (0.0, 180.0, 5.0, true, "deg"),
             // Under about 60 ms there is no tail worth the name, and past two seconds a
             // busy passage fills the square and stops saying anything.
-            Number::PhosphorMs => (60.0, 2000.0, 20.0, true, "ms"),
-            Number::PhosphorIntensity => (10.0, 300.0, 10.0, true, "%"),
-            Number::HistoryMinutes => (1.0, 15.0, 1.0, true, "min"),
+            Number::PhosphorMs => (60.0, 2000.0, 10.0, true, "ms"),
+            Number::PhosphorIntensity => (10.0, 300.0, 5.0, true, "%"),
+            // A request rather than a promise, so the top of the range is what anyone
+            // might ask for; the store settles on what the memory budget allows and
+            // logs the reach it got.
+            Number::HistoryMinutes => (1.0, 60.0, 1.0, true, "min"),
             // Half a second covers a Bluetooth sink, which is the worst of the paths
             // anyone listens through; the ring the analysis reads from holds five
             // times that, so the hold can never starve it.
@@ -1063,6 +1295,57 @@ mod tests {
         let plain = s.effective_rows_per_second();
         s.imm_cinematic = true;
         assert!((plain - s.effective_rows_per_second() * 4.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn the_default_preset_is_what_the_app_ships_with() {
+        // Whatever has been done to the settings, choosing it lands where a reset does.
+        let mut s = Settings::default();
+        s.apply_preset(Preset::Mastering);
+        s.contrast = 0.9;
+        s.theme.set(ThemeSlot::Curve, Some(Argb(0xFF00_FF00)));
+        s.apply_preset(Preset::Default);
+        assert_eq!(s, Settings::default());
+        assert_eq!(s.preset, Preset::Default);
+    }
+
+    #[test]
+    fn the_baseline_is_nostalgia_pluss_and_the_defaults_are_not() {
+        let d = Settings::default();
+        let n = Settings::nostalgia_plus();
+        assert_ne!(d, n);
+        // The baseline is the starting point Nostalgia+'s presets were measured from,
+        // so it names one of them rather than Sonorant's own.
+        assert_eq!(n.preset, Preset::Studio);
+        // Whatever the defaults become, the baseline stays where that program left it.
+        assert_eq!(n.palette, PaletteKind::Magma);
+        assert_eq!(n.scale, FreqScale::Note);
+        assert_eq!((n.fmin, n.fmax), (20.0, 20000.0));
+        assert_eq!(n.window, WindowType::Hann);
+        assert_eq!(n.rows_per_second, 60.0);
+        assert_eq!(n.label_font_size, 7.0);
+    }
+
+    #[test]
+    fn every_preset_lands_somewhere_of_its_own() {
+        // A preset that reproduces another is a row in the menu that teaches nothing.
+        // `Custom` is not a place, it is the word for having left one.
+        let places: Vec<(Preset, Settings)> = Preset::ALL
+            .iter()
+            .copied()
+            .filter(|&p| p != Preset::Custom)
+            .map(|p| {
+                let mut s = Settings::default();
+                s.apply_preset(p);
+                s.preset = Preset::Custom; // the name itself is not the difference
+                (p, s)
+            })
+            .collect();
+        for (i, (a, sa)) in places.iter().enumerate() {
+            for (b, sb) in &places[i + 1..] {
+                assert_ne!(sa, sb, "{a:?} and {b:?} are the same settings");
+            }
+        }
     }
 
     #[test]
