@@ -89,7 +89,7 @@
     <display_length compare="ge">768</display_length>
   </recommends>
 
-  <!-- Two colours out of Magma, the default palette, as the icon uses. -->
+  <!-- Two colours out of Magma, which is the ramp the icon is drawn from. -->
   <branding>
     <color type="primary" scheme_preference="light">#e1a1b0</color>
     <color type="primary" scheme_preference="dark">#1b1236</color>
@@ -98,6 +98,21 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.3.0" date="2026-09-22">
+      <description>
+        <p>Sonorant opens as itself now rather than as the plugin it grew out of: a
+        linear axis over the whole band, a red ramp, bars against a mirrored pair of
+        panes, and the measurement furniture out of the way until it is asked for.</p>
+        <p>Every number can be set to anything its range allows, by a slider and a typed
+        figure as well as the sizes worth returning to. Six more palettes, among them
+        Cividis, which is readable with any colour-vision deficiency, and four more
+        presets: Speech, Classical, Club and Broadcast.</p>
+        <p>The menu is seven groups rather than eleven, each row saying what it is set
+        to, and help is a searchable sheet of the settings themselves with a page on
+        what the parts of the picture are and what the mouse does to them. Switching
+        away from settings you have not saved asks first.</p>
+      </description>
+    </release>
     <release version="0.2.0" date="2026-09-21">
       <description>
         <p>The first release built for both systems: everything the Nostalgia+ plugin

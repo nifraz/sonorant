@@ -8,9 +8,11 @@
 //! numbers, and the `.ico` from the rasters. The files under `packaging/icons` are what
 //! the `icon` example writes, and a test redraws them to check the two still agree.
 //!
-//! The bars are coloured out of [`PaletteKind::Magma`], the default palette, so the
-//! icon is made of the same colours as the spectrogram it stands for, and follows them
-//! if they are ever retuned.
+//! The bars are coloured out of [`PaletteKind::Magma`], and named rather than taken
+//! from the settings: an icon is a fixed thing a desktop caches, so it cannot follow a
+//! palette the person changes, and the one it is drawn from has to be chosen here. The
+//! app ships showing Nostalgia Red these days; Magma stays, because these are the
+//! colours the icon has always been and the ones the AppStream branding quotes.
 
 use sonorant_core::palette::{self, Lut, PaletteKind};
 
